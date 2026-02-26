@@ -12,6 +12,7 @@
 
 ## Documentation
 - Project overview and intent: `README.md`
+- Root package index docs for discovery via `go doc`: `doc.go`
 - Package surface area currently lives directly in source files:
   - `browser/browser.go`
   - `gmail/gmail.go`
@@ -27,3 +28,5 @@
 - Prefer explicit, user-consented operations for machine actions.
 - Implement cross-platform behavior only when requested; keep macOS-specific logic in `macos/`.
 - Add tests alongside package behavior as implementations replace current stubs.
+- Use `github.com/nalgeon/be` for test assertions (`be.Err`, `be.True`, `be.Equal`).
+- Prefer `any` over `interface{}` in new and modified code.
