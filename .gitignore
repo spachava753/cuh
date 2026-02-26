@@ -1,0 +1,23 @@
+# Allowlist-based .gitignore: ignore everything by default.
+*
+
+# Keep directories traversable so negation rules can re-include files.
+!*/
+
+# Always keep this file.
+!.gitignore
+
+# Allowlist core repository metadata/docs.
+!README.md
+!AGENTS.md
+!go.mod
+!go.sum
+!LICENSE
+
+# Allowlist source and docs content.
+!**/*.go
+!**/*.md
+
+# Allowlist GitHub repo metadata if added.
+!.github/
+!.github/**
