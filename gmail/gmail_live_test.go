@@ -11,13 +11,14 @@ import (
 )
 
 const (
-	liveTestFlagEnv  = "GMAIL_LIVE_TEST"
-	liveTestToEnv    = "GMAIL_TEST_RECIPIENT"
-	pollInterval     = 5 * time.Second
-	threadWaitWindow = 2 * time.Minute
+	liveTestFlagEnv = "GMAIL_LIVE_TEST"
+	liveTestToEnv   = "GMAIL_TEST_RECIPIENT"
+
+	pollInterval = 5 * time.Second
+	waitTimeout  = 2 * time.Minute
 )
 
-func TestLiveThreadLifecycle(t *testing.T) {
+func TestLivePrimitiveLifecycle(t *testing.T) {
 	if os.Getenv(liveTestFlagEnv) != "1" {
 		t.Skipf("set %s=1 to run live Gmail integration tests", liveTestFlagEnv)
 	}
@@ -33,34 +34,54 @@ func TestLiveThreadLifecycle(t *testing.T) {
 		recipient = address
 	}
 
-	_, err := ListThreads("", 25)
+	_, err := Labels()
 	be.Err(t, err, nil)
 
-	subject := fmt.Sprintf("cuh live test %d", time.Now().UnixNano())
+	_, err = Find(FindInput{
+		Entity:      EntityMessage,
+		Page:        Page{Limit: 10},
+		Sort:        Sort{By: SortByDate, Order: SortOrderDesc},
+		IncludeMeta: true,
+	})
+	be.Err(t, err, nil)
+
+	subject := fmt.Sprintf("cuh primitive live test %d", time.Now().UnixNano())
 	body := fmt.Sprintf("integration test body %d", time.Now().UnixNano())
-	be.Err(t, SendEmail(recipient, subject, body), nil)
-
-	createdThread, err := waitForThreadBySubject(subject, threadWaitWindow)
+	sendOut, err := Send(SendInput{
+		Message: OutgoingMessage{
+			To:       []string{recipient},
+			Subject:  subject,
+			TextBody: body,
+		},
+	})
 	be.Err(t, err, nil)
+	be.True(t, sendOut.MessageID != "")
 
-	threadID := createdThread.ID
-	be.True(t, threadID != "")
+	ref, err := waitForMessageRefBySubject(subject, waitTimeout)
+	be.Err(t, err, nil)
+	be.True(t, ref.ID != "")
 
-	cleanedUp := false
+	cleanupRef := ref
 	defer func() {
-		if cleanedUp || threadID == "" {
+		if cleanupRef.ID == "" {
 			return
 		}
-		be.Err(t, DeleteThread(threadID), nil)
+		_, _ = Mutate(MutateInput{
+			Refs: []Ref{cleanupRef},
+			Ops:  []MutationOp{{Type: MutationTrash}},
+		})
 	}()
 
-	messages, err := GetThread(threadID)
+	getOut, err := Get(GetInput{
+		Refs: []Ref{ref},
+		Body: BodyOptions{IncludeText: true, MaxChars: 2000},
+	})
 	be.Err(t, err, nil)
-	be.True(t, len(messages) > 0)
+	be.True(t, len(getOut.Items) > 0)
 
 	foundSubject := false
-	for _, msg := range messages {
-		if msg.Subject == subject {
+	for _, item := range getOut.Items {
+		if item.Subject == subject {
 			foundSubject = true
 			break
 		}
@@ -68,62 +89,83 @@ func TestLiveThreadLifecycle(t *testing.T) {
 	be.True(t, foundSubject)
 
 	label := fmt.Sprintf("cuh-live-test-%d", time.Now().Unix())
-	be.Err(t, AddLabelToThread(threadID, label), nil)
-	be.Err(t, waitForLabelState(threadID, label, true, 45*time.Second), nil)
-
-	be.Err(t, RemoveLabelFromThread(threadID, label), nil)
-	be.Err(t, waitForLabelState(threadID, label, false, 45*time.Second), nil)
-
-	be.Err(t, DeleteThread(threadID), nil)
-	cleanedUp = true
-
-	be.Err(t, waitForThreadDeleted(threadID, 90*time.Second), nil)
-
-	threadsAfter, err := ListThreads("", 250)
+	mutOut, err := Mutate(MutateInput{
+		Refs: []Ref{ref},
+		Ops:  []MutationOp{{Type: MutationAddLabel, Value: label}},
+	})
 	be.Err(t, err, nil)
+	be.True(t, mutationSucceeded(mutOut))
+	be.Err(t, waitForLabel(ref, label, true, waitTimeout), nil)
 
-	stillExists := false
-	for _, thread := range threadsAfter {
-		if thread.ID == threadID {
-			stillExists = true
-			break
-		}
-	}
-	be.True(t, !stillExists)
+	mutOut, err = Mutate(MutateInput{
+		Refs: []Ref{ref},
+		Ops:  []MutationOp{{Type: MutationRemoveLabel, Value: label}},
+	})
+	be.Err(t, err, nil)
+	be.True(t, mutationSucceeded(mutOut))
+	be.Err(t, waitForLabel(ref, label, false, waitTimeout), nil)
+
+	mutOut, err = Mutate(MutateInput{
+		Refs: []Ref{ref},
+		Ops:  []MutationOp{{Type: MutationTrash}},
+	})
+	be.Err(t, err, nil)
+	be.True(t, mutationSucceeded(mutOut))
+
+	be.Err(t, waitForMessageRemovedFromAllMail(subject, waitTimeout), nil)
+	cleanupRef = Ref{}
 }
 
-func waitForThreadBySubject(subject string, timeout time.Duration) (Thread, error) {
+func mutationSucceeded(out MutateOutput) bool {
+	if len(out.Results) == 0 {
+		return false
+	}
+	for _, result := range out.Results {
+		if !result.Succeeded {
+			return false
+		}
+	}
+	return true
+}
+
+func waitForMessageRefBySubject(subject string, timeout time.Duration) (Ref, error) {
 	deadline := time.Now().Add(timeout)
 	for {
-		threads, err := ListThreads("", 300)
+		findOut, err := Find(FindInput{
+			Entity: EntityMessage,
+			Query: Query{
+				SubjectContains: []string{subject},
+				InMailbox:       []string{gmailAllMail},
+			},
+			Page:        Page{Limit: 25},
+			Sort:        Sort{By: SortByDate, Order: SortOrderDesc},
+			IncludeMeta: true,
+		})
 		if err != nil {
-			return Thread{}, err
+			return Ref{}, err
 		}
-
-		for _, thread := range threads {
-			if thread.Subject == subject {
-				return thread, nil
+		for i := range findOut.Refs {
+			if i < len(findOut.Meta) && findOut.Meta[i].Subject == subject {
+				return findOut.Refs[i], nil
 			}
 		}
-
 		if time.Now().After(deadline) {
-			return Thread{}, fmt.Errorf("thread with subject %q not found within %s", subject, timeout)
+			return Ref{}, fmt.Errorf("message with subject %q not found in %s", subject, timeout)
 		}
 		time.Sleep(pollInterval)
 	}
 }
 
-func waitForLabelState(threadID string, label string, present bool, timeout time.Duration) error {
+func waitForLabel(ref Ref, label string, present bool, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
-		messages, err := GetThread(threadID)
+		out, err := Get(GetInput{Refs: []Ref{ref}})
 		if err != nil {
 			return err
 		}
-
 		hasLabel := false
-		for _, msg := range messages {
-			if containsLabel(msg.Labels, label) {
+		for _, item := range out.Items {
+			if containsLabel(item.Labels, label) {
 				hasLabel = true
 				break
 			}
@@ -131,7 +173,6 @@ func waitForLabelState(threadID string, label string, present bool, timeout time
 		if hasLabel == present {
 			return nil
 		}
-
 		if time.Now().After(deadline) {
 			state := "removed"
 			if present {
@@ -143,19 +184,34 @@ func waitForLabelState(threadID string, label string, present bool, timeout time
 	}
 }
 
-func waitForThreadDeleted(threadID string, timeout time.Duration) error {
+func waitForMessageRemovedFromAllMail(subject string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
-		_, err := GetThread(threadID)
+		out, err := Find(FindInput{
+			Entity: EntityMessage,
+			Query: Query{
+				SubjectContains: []string{subject},
+				InMailbox:       []string{gmailAllMail},
+			},
+			Page:        Page{Limit: 20},
+			IncludeMeta: true,
+		})
 		if err != nil {
-			if strings.Contains(err.Error(), "not found") {
-				return nil
-			}
 			return err
 		}
 
+		stillPresent := false
+		for i := range out.Refs {
+			if i < len(out.Meta) && out.Meta[i].Subject == subject {
+				stillPresent = true
+				break
+			}
+		}
+		if !stillPresent {
+			return nil
+		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("thread %s still exists after %s", threadID, timeout)
+			return fmt.Errorf("message with subject %q still present in all mail after %s", subject, timeout)
 		}
 		time.Sleep(pollInterval)
 	}
