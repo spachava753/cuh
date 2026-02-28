@@ -111,6 +111,119 @@ static NSString *contacts_string_or_empty(NSString *s) {
   return s ?: @"";
 }
 
+static NSString *contacts_escape_applescript_string(NSString *value) {
+  NSString *escaped = contacts_string_or_empty(value);
+  escaped = [escaped stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+  escaped = [escaped stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""];
+  return escaped;
+}
+
+static BOOL contacts_run_applescript_source(NSString *source, NSString **errorMessage) {
+  NSDictionary *scriptError = nil;
+  NSAppleScript *appleScript = [[NSAppleScript alloc] initWithSource:source];
+  NSAppleEventDescriptor *result = [appleScript executeAndReturnError:&scriptError];
+  if (result != nil) {
+    return YES;
+  }
+
+  NSString *message = scriptError[NSAppleScriptErrorMessage];
+  if (message.length == 0) {
+    NSNumber *code = scriptError[NSAppleScriptErrorNumber];
+    if (code != nil) {
+      message = [NSString stringWithFormat:@"AppleScript error %@", code];
+    }
+  }
+  if (message.length == 0) {
+    message = @"AppleScript execution failed";
+  }
+  if (errorMessage != NULL) {
+    *errorMessage = message;
+  }
+  return NO;
+}
+
+// We intentionally use AppleScript for membership removal because
+// removeMember:fromGroup: can report success without persisting removal on some
+// macOS Contacts backends. The Contacts app scripting path has been more
+// reliable for this operation; we still verify persisted state afterward.
+static BOOL contacts_remove_membership_via_applescript(NSString *groupID,
+                                                        NSString *groupName,
+                                                        NSString *contactID,
+                                                        NSString *givenName,
+                                                        NSString *familyName,
+                                                        NSString **errorMessage) {
+  if (contactID.length == 0) {
+    if (errorMessage != NULL) {
+      *errorMessage = @"missing contact identifier";
+    }
+    return NO;
+  }
+
+  NSString *escapedContactID = contacts_escape_applescript_string(contactID);
+  NSString *escapedGroupID = contacts_escape_applescript_string(groupID);
+  NSString *escapedGroupName = contacts_escape_applescript_string(groupName);
+
+  if (escapedGroupID.length > 0) {
+    NSString *byIDs = [NSString stringWithFormat:
+      @"tell application \"Contacts\"\n"
+       "set targetGroup to first group whose id is \"%@\"\n"
+       "set targetPerson to person id \"%@\"\n"
+       "remove targetPerson from targetGroup\n"
+       "save\n"
+       "end tell\n",
+      escapedGroupID,
+      escapedContactID];
+    if (contacts_run_applescript_source(byIDs, errorMessage)) {
+      return YES;
+    }
+  }
+
+  if (escapedGroupName.length > 0) {
+    NSString *byGroupNameAndID = [NSString stringWithFormat:
+      @"tell application \"Contacts\"\n"
+       "set targetGroup to first group whose name is \"%@\"\n"
+       "set targetPerson to person id \"%@\"\n"
+       "remove targetPerson from targetGroup\n"
+       "save\n"
+       "end tell\n",
+      escapedGroupName,
+      escapedContactID];
+    if (contacts_run_applescript_source(byGroupNameAndID, errorMessage)) {
+      return YES;
+    }
+  }
+
+  if (escapedGroupName.length > 0 && (givenName.length > 0 || familyName.length > 0)) {
+    NSString *selector = nil;
+    if (givenName.length > 0 && familyName.length > 0) {
+      selector = [NSString stringWithFormat:@"first person whose first name is \"%@\" and last name is \"%@\"",
+                                          contacts_escape_applescript_string(givenName),
+                                          contacts_escape_applescript_string(familyName)];
+    } else if (givenName.length > 0) {
+      selector = [NSString stringWithFormat:@"first person whose first name is \"%@\"",
+                                          contacts_escape_applescript_string(givenName)];
+    } else {
+      selector = [NSString stringWithFormat:@"first person whose last name is \"%@\"",
+                                          contacts_escape_applescript_string(familyName)];
+    }
+
+    NSString *byGroupAndName = [NSString stringWithFormat:
+      @"tell application \"Contacts\"\n"
+       "set targetGroup to first group whose name is \"%@\"\n"
+       "set targetPerson to %@\n"
+       "remove targetPerson from targetGroup\n"
+       "save\n"
+       "end tell\n",
+      escapedGroupName,
+      selector];
+    if (contacts_run_applescript_source(byGroupAndName, errorMessage)) {
+      return YES;
+    }
+  }
+
+  return NO;
+}
+
 static void contacts_free_ref(ContactsRef *ref) {
   if (ref == NULL) {
     return;
@@ -1187,6 +1300,7 @@ static ContactsWriteResult contacts_apply_patch(CNContactStore *store, const Con
     CNSaveRequest *membership = [[CNSaveRequest alloc] init];
     NSMutableArray *addedGroupIDs = [NSMutableArray array];
     NSMutableArray *removedGroupIDs = [NSMutableArray array];
+    NSMutableArray *removedGroupNames = [NSMutableArray array];
 
     for (int i = 0; i < patch->add_group_ids_len; i++) {
       NSString *groupID = contacts_nsstring(patch->add_group_ids[i]);
@@ -1220,14 +1334,25 @@ static ContactsWriteResult contacts_apply_patch(CNContactStore *store, const Con
         }
         return contacts_make_error_write_result(patch->ref, CONTACTS_ERR_NOT_FOUND, msg);
       }
-
-      [membership removeMember:existing fromGroup:group];
       [removedGroupIDs addObject:groupID];
+      [removedGroupNames addObject:contacts_string_or_empty(group.name)];
     }
 
-    NSError *membershipErr = nil;
-    if (![store executeSaveRequest:membership error:&membershipErr]) {
-      return contacts_make_error_write_result(patch->ref, contacts_map_nserror_code(membershipErr), membershipErr.localizedDescription);
+    if (addedGroupIDs.count > 0) {
+      NSError *membershipErr = nil;
+      if (![store executeSaveRequest:membership error:&membershipErr]) {
+        return contacts_make_error_write_result(patch->ref, contacts_map_nserror_code(membershipErr), membershipErr.localizedDescription);
+      }
+    }
+
+    for (NSUInteger i = 0; i < removedGroupIDs.count; i++) {
+      NSString *removeGroupID = removedGroupIDs[i];
+      NSString *removeGroupName = removedGroupNames[i];
+      NSString *scriptErr = nil;
+      if (!contacts_remove_membership_via_applescript(removeGroupID, removeGroupName, contactID, existing.givenName, existing.familyName, &scriptErr)) {
+        NSString *message = [NSString stringWithFormat:@"AppleScript remove failed for group %@: %@", removeGroupID, scriptErr ?: @"unknown error"];
+        return contacts_make_error_write_result(patch->ref, CONTACTS_ERR_STORE, message);
+      }
     }
 
     int verifyCode = CONTACTS_ERR_NONE;
@@ -1420,6 +1545,7 @@ int contacts_mutate(const ContactsMutateRequest *req, ContactsMutateResult *out,
       NSString *membershipMessage = nil;
       NSMutableArray *addedGroupIDs = [NSMutableArray array];
       NSMutableArray *removedGroupIDs = [NSMutableArray array];
+      NSMutableArray *removedGroupNames = [NSMutableArray array];
 
       for (NSString *groupID in addGroups) {
         NSError *groupErr = nil;
@@ -1449,8 +1575,8 @@ int contacts_mutate(const ContactsMutateRequest *req, ContactsMutateResult *out,
             break;
           }
 
-          [membershipReq removeMember:existing fromGroup:group];
           [removedGroupIDs addObject:groupID];
+          [removedGroupNames addObject:contacts_string_or_empty(group.name)];
         }
       }
 
@@ -1459,9 +1585,27 @@ int contacts_mutate(const ContactsMutateRequest *req, ContactsMutateResult *out,
         continue;
       }
 
-      NSError *membershipErr = nil;
-      if (![store executeSaveRequest:membershipReq error:&membershipErr]) {
-        out->items[i] = contacts_make_error_write_result(ref, contacts_map_nserror_code(membershipErr), membershipErr.localizedDescription);
+      if (addedGroupIDs.count > 0) {
+        NSError *membershipErr = nil;
+        if (![store executeSaveRequest:membershipReq error:&membershipErr]) {
+          out->items[i] = contacts_make_error_write_result(ref, contacts_map_nserror_code(membershipErr), membershipErr.localizedDescription);
+          continue;
+        }
+      }
+
+      for (NSUInteger gi = 0; gi < removedGroupIDs.count; gi++) {
+        NSString *removeGroupID = removedGroupIDs[gi];
+        NSString *removeGroupName = removedGroupNames[gi];
+        NSString *scriptErr = nil;
+        if (!contacts_remove_membership_via_applescript(removeGroupID, removeGroupName, contactID, existing.givenName, existing.familyName, &scriptErr)) {
+          membershipError = YES;
+          membershipMessage = [NSString stringWithFormat:@"AppleScript remove failed for group %@: %@", removeGroupID, scriptErr ?: @"unknown error"];
+          break;
+        }
+      }
+
+      if (membershipError) {
+        out->items[i] = contacts_make_error_write_result(ref, CONTACTS_ERR_STORE, membershipMessage);
         continue;
       }
 

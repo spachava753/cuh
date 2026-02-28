@@ -35,10 +35,19 @@
 // # Known Limitation
 //
 // On some macOS versions/account backends, Contacts.framework may report success
-// for group membership removal while membership remains unchanged. The package
-// verifies membership post-write and returns a typed conflict error in that
-// case (for example, via Mutate with MutationRemoveFromGroup) instead of
-// reporting false success.
+// for group membership removal while membership remains unchanged.
+//
+// Workaround rationale: removing members from the Contacts app UI (and the same
+// operation through the Contacts AppleScript dictionary) can persist for records
+// where the direct Contacts.framework removeMember path does not. To avoid false
+// success, this package routes group-member removal through an AppleScript-backed
+// path and still verifies membership post-write. If state does not persist,
+// Mutate/Upsert return typed errors rather than reporting success.
+//
+// In observed live runs, creating contacts with an initial note value can fail
+// deterministically with a store error (for example, Cocoa error 134092), while
+// creates without notes succeed. For those environments, create first without
+// note and then attempt a follow-up note mutation with typed error handling.
 //
 // # Composition Examples
 //
