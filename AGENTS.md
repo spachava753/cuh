@@ -9,6 +9,9 @@
 - Implement cross-platform behavior only when requested; keep macOS-specific logic in `macos/`.
 - Use `github.com/nalgeon/be` for test assertions (`be.Err`, `be.True`, `be.Equal`).
 - Prefer `any` over `interface{}` in new and modified code.
+- For stateful system integrations (OS frameworks, external stores), treat write-call success as necessary but not sufficient when correctness matters: add read-after-write verification and surface typed errors if intended state does not persist.
+- In cgo/bridge code that hydrates partial records, guard field access based on fetched-key availability (or equivalent capability checks) to avoid runtime exceptions from unfetched properties.
+- For live tests over system data stores, assert behavioral contracts (persisted state or explicit typed failure) rather than assuming all environments support every mutation path.
 
 ## Cognitive Framework for New/Refactored Packages
 

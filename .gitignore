@@ -17,6 +17,8 @@
 # Allowlist source and docs content.
 !**/*.go
 !**/*.md
+!**/*.h
+!**/*.m
 
 # Allowlist GitHub repo metadata if added.
 !.github/
