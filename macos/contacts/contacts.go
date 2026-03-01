@@ -92,7 +92,6 @@ type Query struct {
 	NameContains         string
 	OrganizationContains string
 	EmailDomain          string
-	NoteContains         string
 	GroupIDsAny          []string
 	IDs                  []string
 	Match                MatchPolicy
@@ -167,8 +166,6 @@ const (
 	FieldEmails Field = "emails"
 	// FieldPhones requests phone numbers.
 	FieldPhones Field = "phones"
-	// FieldNote requests contact notes.
-	FieldNote Field = "note"
 	// FieldGroups requests group memberships.
 	FieldGroups Field = "groups"
 )
@@ -188,7 +185,6 @@ type Item struct {
 	Nickname     string
 	Organization string
 	JobTitle     string
-	Note         string
 	Emails       []LabeledValue
 	Phones       []LabeledValue
 	GroupIDs     []string
@@ -215,7 +211,6 @@ type ContactDraft struct {
 	Nickname     string
 	Organization string
 	JobTitle     string
-	Note         string
 	Emails       []LabeledValue
 	Phones       []LabeledValue
 	GroupIDs     []string
@@ -233,7 +228,6 @@ type ContactChanges struct {
 	Nickname       *string
 	Organization   *string
 	JobTitle       *string
-	Note           *string
 	Emails         *[]LabeledValue
 	Phones         *[]LabeledValue
 	AddGroupIDs    []string
@@ -270,8 +264,6 @@ type UpsertOutput struct {
 type MutationType string
 
 const (
-	// MutationSetNote replaces the note field with MutationOp.Value.
-	MutationSetNote MutationType = "set_note"
 	// MutationSetOrganization replaces the organization field.
 	MutationSetOrganization MutationType = "set_organization"
 	// MutationSetJobTitle replaces the job title field.

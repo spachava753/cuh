@@ -44,19 +44,17 @@ enum {
   CONTACTS_FIELD_ORGANIZATION = 1 << 1,
   CONTACTS_FIELD_EMAILS = 1 << 2,
   CONTACTS_FIELD_PHONES = 1 << 3,
-  CONTACTS_FIELD_NOTE = 1 << 4,
-  CONTACTS_FIELD_GROUPS = 1 << 5,
+  CONTACTS_FIELD_GROUPS = 1 << 4,
 };
 
 enum {
-  CONTACTS_MUTATION_SET_NOTE = 1,
-  CONTACTS_MUTATION_SET_ORGANIZATION = 2,
-  CONTACTS_MUTATION_SET_JOB_TITLE = 3,
-  CONTACTS_MUTATION_SET_GIVEN_NAME = 4,
-  CONTACTS_MUTATION_SET_FAMILY_NAME = 5,
-  CONTACTS_MUTATION_ADD_TO_GROUP = 6,
-  CONTACTS_MUTATION_REMOVE_FROM_GROUP = 7,
-  CONTACTS_MUTATION_DELETE = 8,
+  CONTACTS_MUTATION_SET_ORGANIZATION = 1,
+  CONTACTS_MUTATION_SET_JOB_TITLE = 2,
+  CONTACTS_MUTATION_SET_GIVEN_NAME = 3,
+  CONTACTS_MUTATION_SET_FAMILY_NAME = 4,
+  CONTACTS_MUTATION_ADD_TO_GROUP = 5,
+  CONTACTS_MUTATION_REMOVE_FROM_GROUP = 6,
+  CONTACTS_MUTATION_DELETE = 7,
 };
 
 enum {
@@ -105,7 +103,6 @@ typedef struct {
   char *nickname;
   char *organization;
   char *job_title;
-  char *note;
   ContactsLabeledValue *emails;
   int emails_len;
   ContactsLabeledValue *phones;
@@ -124,7 +121,6 @@ typedef struct {
   char *name_contains;
   char *organization_contains;
   char *email_domain;
-  char *note_contains;
   char **group_ids_any;
   int group_ids_any_len;
   char **ids;
@@ -151,7 +147,6 @@ typedef struct {
   char *nickname;
   char *organization;
   char *job_title;
-  char *note;
   ContactsLabeledValue *emails;
   int emails_len;
   ContactsLabeledValue *phones;
@@ -174,8 +169,6 @@ typedef struct {
   char *organization;
   int set_job_title;
   char *job_title;
-  int set_note;
-  char *note;
   int set_emails;
   ContactsLabeledValue *replace_emails;
   int replace_emails_len;

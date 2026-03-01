@@ -98,24 +98,6 @@ func TestLivePrimitiveLifecycle(t *testing.T) {
 	be.Err(t, err, nil)
 	be.True(t, len(getOut.Items) > 0)
 
-	noteValue := marker + "-note"
-	noteOut, err := Mutate(MutateInput{
-		Refs: []Ref{contactRef},
-		Ops:  []MutationOp{{Type: MutationSetNote, Value: noteValue}},
-	})
-	be.Err(t, err, nil)
-	be.True(t, len(noteOut.Results) == 1)
-	if noteOut.Results[0].Succeeded {
-		noteGetOut, getErr := Get(GetInput{Refs: []Ref{contactRef}, Fields: []Field{FieldNote}})
-		be.Err(t, getErr, nil)
-		be.True(t, len(noteGetOut.Items) > 0)
-		if noteGetOut.Items[0].Note != "" {
-			be.True(t, strings.Contains(noteGetOut.Items[0].Note, noteValue))
-		}
-	} else {
-		be.True(t, allowedNoteMutationError(noteOut.Results[0].Err))
-	}
-
 	mutateOut, err := Mutate(MutateInput{
 		Refs: []Ref{contactRef},
 		Ops: []MutationOp{{
@@ -233,22 +215,6 @@ func waitForContactMissing(id string, timeout time.Duration) error {
 			return fmt.Errorf("contact %q still present after %s", id, timeout)
 		}
 		time.Sleep(pollInterval)
-	}
-}
-
-func allowedNoteMutationError(err error) bool {
-	if err == nil {
-		return false
-	}
-	contactErr, ok := err.(*Error)
-	if !ok {
-		return false
-	}
-	switch contactErr.Code {
-	case ErrorCodePermissionDenied, ErrorCodeValidation, ErrorCodeStore:
-		return true
-	default:
-		return false
 	}
 }
 

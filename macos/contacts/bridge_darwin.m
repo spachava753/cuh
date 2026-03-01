@@ -416,17 +416,6 @@ static BOOL contacts_contact_matches(CNContact *contact,
     }
   }
 
-  NSString *noteNeedle = contacts_nsstring(req->note_contains);
-  if (noteNeedle.length > 0) {
-    clauses++;
-    BOOL noteMatch = NO;
-    if ([contact isKeyAvailable:CNContactNoteKey]) {
-      noteMatch = contacts_string_contains(contact.note, noteNeedle);
-    }
-    if (noteMatch) {
-      matched++;
-    }
-  }
 
   if (idSet != nil && idSet.count > 0) {
     clauses++;
@@ -465,9 +454,6 @@ static NSArray *contacts_find_keys(const ContactsFindRequest *req) {
   }
   if (req->email_domain != NULL) {
     [keys addObject:CNContactEmailAddressesKey];
-  }
-  if (req->note_contains != NULL) {
-    [keys addObject:CNContactNoteKey];
   }
 
   return keys;
@@ -727,9 +713,6 @@ static NSArray *contacts_get_keys(uint32_t fieldMask) {
   if (includeAll || (fieldMask & CONTACTS_FIELD_PHONES) != 0) {
     [keys addObject:CNContactPhoneNumbersKey];
   }
-  if (includeAll || (fieldMask & CONTACTS_FIELD_NOTE) != 0) {
-    [keys addObject:CNContactNoteKey];
-  }
   return keys;
 }
 
@@ -875,11 +858,6 @@ int contacts_get(const ContactsGetRequest *req, ContactsGetResult *out, Contacts
       dst->job_title = contacts_strdup_ns(contacts_string_or_empty(src.jobTitle));
     } else {
       dst->job_title = contacts_strdup_ns(@"");
-    }
-    if ([src isKeyAvailable:CNContactNoteKey]) {
-      dst->note = contacts_strdup_ns(contacts_string_or_empty(src.note));
-    } else {
-      dst->note = contacts_strdup_ns(@"");
     }
     dst->modified_at_unix = 0;
 
@@ -1121,8 +1099,10 @@ static ContactsWriteResult contacts_make_success_result_for_contact(CNContactSto
   return out;
 }
 
+
 static ContactsWriteResult contacts_apply_create(CNContactStore *store, const ContactsDraft *draft) {
   ContactsWriteResult result = {0};
+
 
   CNMutableContact *contact = [[CNMutableContact alloc] init];
   contact.givenName = contacts_string_or_empty(contacts_nsstring(draft->given_name));
@@ -1131,7 +1111,6 @@ static ContactsWriteResult contacts_apply_create(CNContactStore *store, const Co
   contact.nickname = contacts_string_or_empty(contacts_nsstring(draft->nickname));
   contact.organizationName = contacts_string_or_empty(contacts_nsstring(draft->organization));
   contact.jobTitle = contacts_string_or_empty(contacts_nsstring(draft->job_title));
-  contact.note = contacts_string_or_empty(contacts_nsstring(draft->note));
   contact.emailAddresses = contacts_emails_from_c(draft->emails, draft->emails_len);
   contact.phoneNumbers = contacts_phones_from_c(draft->phones, draft->phones_len);
 
@@ -1221,7 +1200,6 @@ static NSArray *contacts_patch_keys(void) {
     CNContactNicknameKey,
     CNContactOrganizationNameKey,
     CNContactJobTitleKey,
-    CNContactNoteKey,
     CNContactEmailAddressesKey,
     CNContactPhoneNumbersKey,
   ];
@@ -1267,13 +1245,6 @@ static ContactsWriteResult contacts_apply_patch(CNContactStore *store, const Con
   }
   if (patch->set_job_title != 0) {
     mutable.jobTitle = contacts_string_or_empty(contacts_nsstring(patch->job_title));
-    hasFieldUpdates = YES;
-  }
-  if (patch->set_note != 0) {
-    if (![existing isKeyAvailable:CNContactNoteKey]) {
-      return contacts_make_error_write_result(patch->ref, CONTACTS_ERR_PERMISSION_DENIED, @"contact note field is not accessible");
-    }
-    mutable.note = contacts_string_or_empty(contacts_nsstring(patch->note));
     hasFieldUpdates = YES;
   }
   if (patch->set_emails != 0) {
@@ -1434,7 +1405,6 @@ int contacts_mutate(const ContactsMutateRequest *req, ContactsMutateResult *out,
     }
 
     BOOL deleteOp = NO;
-    NSString *setNote = nil;
     NSString *setOrg = nil;
     NSString *setJob = nil;
     NSString *setGiven = nil;
@@ -1446,9 +1416,6 @@ int contacts_mutate(const ContactsMutateRequest *req, ContactsMutateResult *out,
       ContactsMutationOp op = req->ops[oi];
       NSString *value = contacts_nsstring(op.value);
       switch (op.type) {
-        case CONTACTS_MUTATION_SET_NOTE:
-          setNote = value ?: @"";
-          break;
         case CONTACTS_MUTATION_SET_ORGANIZATION:
           setOrg = value ?: @"";
           break;
@@ -1504,14 +1471,6 @@ int contacts_mutate(const ContactsMutateRequest *req, ContactsMutateResult *out,
 
     CNMutableContact *mutable = [existing mutableCopy];
     BOOL hasFieldUpdates = NO;
-    if (setNote != nil) {
-      if (![existing isKeyAvailable:CNContactNoteKey]) {
-        out->items[i] = contacts_make_error_write_result(ref, CONTACTS_ERR_PERMISSION_DENIED, @"contact note field is not accessible");
-        continue;
-      }
-      mutable.note = setNote;
-      hasFieldUpdates = YES;
-    }
     if (setOrg != nil) {
       mutable.organizationName = setOrg;
       hasFieldUpdates = YES;
@@ -1832,9 +1791,6 @@ void contacts_free_get_result(ContactsGetResult *res) {
       }
       if (item->job_title != NULL) {
         free(item->job_title);
-      }
-      if (item->note != NULL) {
-        free(item->note);
       }
       contacts_free_labeled_values(item->emails, item->emails_len);
       contacts_free_labeled_values(item->phones, item->phones_len);

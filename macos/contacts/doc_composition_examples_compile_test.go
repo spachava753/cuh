@@ -7,7 +7,7 @@ import (
 	"github.com/spachava753/cuh/macos/contacts"
 )
 
-func composeUpdateSingleContactNote() error {
+func composeUpdateSingleContactOrganization() error {
 	findOut, err := contacts.Find(contacts.FindInput{
 		Query: contacts.Query{
 			NameContains:         "Priya",
@@ -26,8 +26,8 @@ func composeUpdateSingleContactNote() error {
 	_, err = contacts.Mutate(contacts.MutateInput{
 		Refs: []contacts.Ref{findOut.Refs[0]},
 		Ops: []contacts.MutationOp{{
-			Type:  contacts.MutationSetNote,
-			Value: "Met at Acme SF office",
+			Type:  contacts.MutationSetOrganization,
+			Value: "Acme Ventures",
 		}},
 	})
 	return err
@@ -101,12 +101,12 @@ func composeCreateThenPatchContact() error {
 		return nil
 	}
 
-	note := "Emergency contact"
+	jobTitle := "Primary Physician"
 	_, err = contacts.Upsert(contacts.UpsertInput{
 		Patch: []contacts.ContactPatch{{
 			Ref: upsertOut.Results[0].Ref,
 			Changes: contacts.ContactChanges{
-				Note: &note,
+				JobTitle: &jobTitle,
 			},
 		}},
 	})

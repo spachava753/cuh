@@ -44,14 +44,19 @@
 // path and still verifies membership post-write. If state does not persist,
 // Mutate/Upsert return typed errors rather than reporting success.
 //
-// In observed live runs, creating contacts with an initial note value can fail
-// deterministically with a store error (for example, Cocoa error 134092), while
-// creates without notes succeed. For those environments, create first without
-// note and then attempt a follow-up note mutation with typed error handling.
+// On iOS 13/macOS 13 and later, reading or writing the note field requires the
+// managed entitlement `com.apple.developer.contacts.notes`.
+//
+// This package intentionally does not expose contact note operations.
+//
+// If note reads/writes are required, use Contacts AppleScript directly.
+// AppleScript can read/write notes, but it does not expose explicit
+// account/container routing and does not provide the same typed
+// authorization/error surface as this package.
 //
 // # Composition Examples
 //
-// 1) Update one matched contact note:
+// 1) Update one matched contact organization:
 //
 //	findOut, err := contacts.Find(contacts.FindInput{
 //		Query: contacts.Query{NameContains: "Priya", OrganizationContains: "Acme"},
@@ -64,8 +69,8 @@
 //	_, err = contacts.Mutate(contacts.MutateInput{
 //		Refs: []contacts.Ref{findOut.Refs[0]},
 //		Ops: []contacts.MutationOp{{
-//			Type:  contacts.MutationSetNote,
-//			Value: "Met at Acme SF office",
+//			Type:  contacts.MutationSetOrganization,
+//			Value: "Acme Ventures",
 //		}},
 //	})
 //
@@ -118,7 +123,7 @@
 //		Patch: []contacts.ContactPatch{{
 //			Ref: created,
 //			Changes: contacts.ContactChanges{
-//				Note: ptr("Emergency contact"),
+//				JobTitle: ptr("Primary Physician"),
 //			},
 //		}},
 //	})

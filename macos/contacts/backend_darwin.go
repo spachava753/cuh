@@ -245,7 +245,6 @@ func find(input FindInput) (FindOutput, error) {
 		name_contains:         cString(cs, input.Query.NameContains),
 		organization_contains: cString(cs, input.Query.OrganizationContains),
 		email_domain:          cString(cs, input.Query.EmailDomain),
-		note_contains:         cString(cs, input.Query.NoteContains),
 		group_ids_any:         groupIDs,
 		group_ids_any_len:     groupIDsLen,
 		ids:                   ids,
@@ -318,8 +317,6 @@ func fieldMask(fields []Field) C.uint32_t {
 			mask |= C.CONTACTS_FIELD_EMAILS
 		case FieldPhones:
 			mask |= C.CONTACTS_FIELD_PHONES
-		case FieldNote:
-			mask |= C.CONTACTS_FIELD_NOTE
 		case FieldGroups:
 			mask |= C.CONTACTS_FIELD_GROUPS
 		}
@@ -361,7 +358,6 @@ func get(input GetInput) (GetOutput, error) {
 			Nickname:     goString(cItems[i].nickname),
 			Organization: goString(cItems[i].organization),
 			JobTitle:     goString(cItems[i].job_title),
-			Note:         goString(cItems[i].note),
 		}
 		if cItems[i].modified_at_unix > 0 {
 			item.ModifiedAt = time.Unix(int64(cItems[i].modified_at_unix), 0)
@@ -417,7 +413,6 @@ func toCDrafts(cs *cleanupStack, drafts []ContactDraft) (*C.ContactsDraft, C.int
 			nickname:      cString(cs, drafts[i].Nickname),
 			organization:  cString(cs, drafts[i].Organization),
 			job_title:     cString(cs, drafts[i].JobTitle),
-			note:          cString(cs, drafts[i].Note),
 			emails:        emails,
 			emails_len:    emailsLen,
 			phones:        phones,
@@ -482,10 +477,6 @@ func toCPatches(cs *cleanupStack, patches []ContactPatch) (*C.ContactsPatch, C.i
 			cp.set_job_title = 1
 			cp.job_title = cString(cs, *patches[i].Changes.JobTitle)
 		}
-		if patches[i].Changes.Note != nil {
-			cp.set_note = 1
-			cp.note = cString(cs, *patches[i].Changes.Note)
-		}
 		if patches[i].Changes.Emails != nil {
 			cp.set_emails = 1
 			emails, emailsLen := toCLabeledValues(cs, *patches[i].Changes.Emails)
@@ -543,8 +534,6 @@ func upsert(input UpsertInput) (UpsertOutput, error) {
 
 func mutationTypeToC(t MutationType) C.int {
 	switch t {
-	case MutationSetNote:
-		return C.CONTACTS_MUTATION_SET_NOTE
 	case MutationSetOrganization:
 		return C.CONTACTS_MUTATION_SET_ORGANIZATION
 	case MutationSetJobTitle:
