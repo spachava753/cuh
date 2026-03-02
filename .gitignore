@@ -14,9 +14,8 @@
 !go.sum
 !LICENSE
 
-# Allowlist source and docs content.
+# Allowlist source content.
 !**/*.go
-!**/*.md
 !**/*.h
 !**/*.m
 
