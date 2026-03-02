@@ -108,34 +108,11 @@ type Contact struct {
 
 // CreateContactInput specifies fields for a new contact.
 //
-// Only non-zero/non-nil fields are set on the created contact. The Contacts
-// framework assigns the identifier.
+// Only writable, non-zero/non-nil fields from Contact are set on the created
+// contact. Read-only fields (Identifier, ImageDataAvailable, and
+// ThumbnailImageData) are ignored.
 type CreateContactInput struct {
-	ContactType        ContactType
-	NamePrefix         string
-	GivenName          string
-	MiddleName         string
-	FamilyName         string
-	PreviousFamilyName string
-	NameSuffix         string
-	Nickname           string
-	PhoneticGivenName  string
-	PhoneticMiddleName string
-	PhoneticFamilyName string
-	OrganizationName   string
-	DepartmentName     string
-	JobTitle           string
-	Note               string
-	Birthday           *DateComponents
-	PhoneNumbers       []LabeledValue[string]
-	EmailAddresses     []LabeledValue[string]
-	PostalAddresses    []LabeledValue[PostalAddress]
-	URLAddresses       []LabeledValue[string]
-	ContactRelations   []LabeledValue[ContactRelation]
-	SocialProfiles     []LabeledValue[SocialProfile]
-	InstantMessages    []LabeledValue[InstantMessage]
-	Dates              []LabeledValue[DateComponents]
-	ImageData          []byte
+	Contact
 	// ContainerID is the container to add the contact to.
 	// If empty, the default container is used.
 	ContainerID string

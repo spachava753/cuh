@@ -107,28 +107,30 @@ func TestCreateGetDeleteContact(t *testing.T) {
 
 	// Create
 	input := CreateContactInput{
-		GivenName:        testPrefix + "John",
-		FamilyName:       testPrefix + "Doe",
-		Nickname:         "JD",
-		JobTitle:         "Engineer",
-		OrganizationName: "TestCorp",
-		PhoneNumbers: []LabeledValue[string]{
-			{Label: "mobile", Value: "+1234567890"},
-			{Label: "home", Value: "+0987654321"},
+		Contact: Contact{
+			GivenName:        testPrefix + "John",
+			FamilyName:       testPrefix + "Doe",
+			Nickname:         "JD",
+			JobTitle:         "Engineer",
+			OrganizationName: "TestCorp",
+			PhoneNumbers: []LabeledValue[string]{
+				{Label: "mobile", Value: "+1234567890"},
+				{Label: "home", Value: "+0987654321"},
+			},
+			EmailAddresses: []LabeledValue[string]{
+				{Label: "work", Value: "john.doe@test.example.com"},
+			},
+			PostalAddresses: []LabeledValue[PostalAddress]{
+				{Label: "home", Value: PostalAddress{
+					Street:     "123 Test St",
+					City:       "Testville",
+					State:      "TS",
+					PostalCode: "12345",
+					Country:    "Testland",
+				}},
+			},
+			Birthday: &DateComponents{Year: 1990, Month: 6, Day: 15},
 		},
-		EmailAddresses: []LabeledValue[string]{
-			{Label: "work", Value: "john.doe@test.example.com"},
-		},
-		PostalAddresses: []LabeledValue[PostalAddress]{
-			{Label: "home", Value: PostalAddress{
-				Street:     "123 Test St",
-				City:       "Testville",
-				State:      "TS",
-				PostalCode: "12345",
-				Country:    "Testland",
-			}},
-		},
-		Birthday: &DateComponents{Year: 1990, Month: 6, Day: 15},
 	}
 
 	created, err := CreateContact(ctx, input)
@@ -182,10 +184,12 @@ func TestCreateContactOrganization(t *testing.T) {
 	ctx := context.Background()
 
 	input := CreateContactInput{
-		ContactType:      ContactTypeOrganization,
-		OrganizationName: testPrefix + "TestOrg Inc",
-		EmailAddresses: []LabeledValue[string]{
-			{Label: "work", Value: "info@testorg.example.com"},
+		Contact: Contact{
+			ContactType:      ContactTypeOrganization,
+			OrganizationName: testPrefix + "TestOrg Inc",
+			EmailAddresses: []LabeledValue[string]{
+				{Label: "work", Value: "info@testorg.example.com"},
+			},
 		},
 	}
 
@@ -203,8 +207,10 @@ func TestUpdateContact(t *testing.T) {
 	ctx := context.Background()
 
 	created, err := CreateContact(ctx, CreateContactInput{
-		GivenName:  testPrefix + "Update",
-		FamilyName: testPrefix + "Contact",
+		Contact: Contact{
+			GivenName:  testPrefix + "Update",
+			FamilyName: testPrefix + "Contact",
+		},
 	})
 	be.Err(t, err, nil)
 	defer cleanupContact(t, ctx, created.Identifier)
@@ -235,15 +241,19 @@ func TestListContacts(t *testing.T) {
 
 	// Create two test contacts
 	c1, err := CreateContact(ctx, CreateContactInput{
-		GivenName:  testPrefix + "Alice",
-		FamilyName: testPrefix + "ListTest",
+		Contact: Contact{
+			GivenName:  testPrefix + "Alice",
+			FamilyName: testPrefix + "ListTest",
+		},
 	})
 	be.Err(t, err, nil)
 	defer cleanupContact(t, ctx, c1.Identifier)
 
 	c2, err := CreateContact(ctx, CreateContactInput{
-		GivenName:  testPrefix + "Bob",
-		FamilyName: testPrefix + "ListTest",
+		Contact: Contact{
+			GivenName:  testPrefix + "Bob",
+			FamilyName: testPrefix + "ListTest",
+		},
 	})
 	be.Err(t, err, nil)
 	defer cleanupContact(t, ctx, c2.Identifier)
@@ -319,8 +329,10 @@ func TestListContactsFilterContains(t *testing.T) {
 	ctx := context.Background()
 
 	c1, err := CreateContact(ctx, CreateContactInput{
-		GivenName:  testPrefix + "FilterContains",
-		FamilyName: testPrefix + "Unique987654",
+		Contact: Contact{
+			GivenName:  testPrefix + "FilterContains",
+			FamilyName: testPrefix + "Unique987654",
+		},
 	})
 	be.Err(t, err, nil)
 	defer cleanupContact(t, ctx, c1.Identifier)
@@ -415,8 +427,10 @@ func TestAddRemoveContactGroup(t *testing.T) {
 
 	// Create contact
 	c, err := CreateContact(ctx, CreateContactInput{
-		GivenName:  testPrefix + "Member",
-		FamilyName: testPrefix + "GroupTest",
+		Contact: Contact{
+			GivenName:  testPrefix + "Member",
+			FamilyName: testPrefix + "GroupTest",
+		},
 	})
 	be.Err(t, err, nil)
 	defer cleanupContact(t, ctx, c.Identifier)
@@ -467,8 +481,10 @@ func TestDeleteGroupWithContacts(t *testing.T) {
 
 	// Create contact
 	c, err := CreateContact(ctx, CreateContactInput{
-		GivenName:  testPrefix + "InGroup",
-		FamilyName: testPrefix + "DeleteGroupTest",
+		Contact: Contact{
+			GivenName:  testPrefix + "InGroup",
+			FamilyName: testPrefix + "DeleteGroupTest",
+		},
 	})
 	be.Err(t, err, nil)
 	defer cleanupContact(t, ctx, c.Identifier)
@@ -669,8 +685,10 @@ func TestMultipleContactsInGroup(t *testing.T) {
 	var contactIDs []string
 	for i := 0; i < 3; i++ {
 		c, err := CreateContact(ctx, CreateContactInput{
-			GivenName:  testPrefix + "Multi",
-			FamilyName: testPrefix + "Member",
+			Contact: Contact{
+				GivenName:  testPrefix + "Multi",
+				FamilyName: testPrefix + "Member",
+			},
 		})
 		be.Err(t, err, nil)
 		contactIDs = append(contactIDs, c.Identifier)
