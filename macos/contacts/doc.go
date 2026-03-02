@@ -1,132 +1,61 @@
-// Package contacts provides primitive-first contact management for macOS agents.
+// Package contacts provides agent-oriented primitives for managing macOS
+// Contacts (Contacts.framework) via cgo.
 //
-// The package intentionally exposes only five core primitives:
+// The package exposes five orthogonal primitive groups:
 //
-//   - Find: select contact references with typed query filters and pagination.
-//   - Get: hydrate references into typed contact items.
-//   - Upsert: create contacts and patch existing contacts.
-//   - Mutate: apply explicit state transitions to existing contacts.
-//   - Groups: discover and manage the group catalog.
+//   - Contacts: create, get, list (with filtering), delete contacts.
+//   - Groups: create (with optional parent), get, list, delete groups.
+//   - Membership: add/remove a contact to/from a group.
+//   - Containers: list and get container metadata.
+//   - Authorization: check and request Contacts access.
 //
-// The intended composition model is:
-//
-//	find/select -> get/hydrate -> decide -> mutate/upsert
+// Groups model both groups and subgroups uniformly. A group may have a parent
+// group (making it a subgroup) and/or child groups. The API does not
+// distinguish between "groups" and "subgroups" — they are the same entity with
+// optional parent/child relationships.
 //
 // # Safety Model
 //
-// All side effects are explicit through Upsert, Mutate, and Groups actions.
-// Find and Get are read-only. Mutating primitives return per-item structured
-// results so callers can reason about partial success.
+// Most mutating operations (create, delete, add membership) delegate directly
+// to the Contacts.framework via CNSaveRequest. [RemoveContactFromGroup] uses
+// osascript (AppleScript) instead, because the CNSaveRequest
+// removeMember:fromGroup: method has a known bug on macOS 14.6+/15.x where
+// removal silently fails. The package does not introduce its own invariants
+// or preconditions beyond what the framework enforces. If an operation
+// violates a framework constraint (e.g., deleting a non-existent contact),
+// the framework error is returned directly.
 //
-// This package does not provide dry-run mode in v1. Callers should perform
-// explicit read/decide phases before writing.
+// # Composition Pattern
 //
-// # Platform
+//  1. Use ListContacts with filters + pagination to find contacts.
+//  2. Use GetContact to hydrate a single contact by identifier.
+//  3. Use CreateContact / DeleteContact for mutations.
+//  4. Use ListGroups to discover groups (with parent/child info).
+//  5. Use AddContactToGroup / RemoveContactFromGroup for membership.
 //
-// The live backend is implemented only on Darwin using direct cgo bindings to
-// Contacts.framework (CNContactStore, CNContactFetchRequest, CNSaveRequest).
-// Non-Darwin builds return ErrUnsupportedPlatform.
+// # Context
 //
-// # Authorization
+// All functions accept context.Context. Long-running enumerations check for
+// context cancellation between iterations where possible. Note that individual
+// cgo calls into Contacts.framework are not interruptible.
 //
-// Use AuthorizationStatus to inspect current permission state and RequestAccess
-// to request Contacts access when needed.
+// # Build Constraints
 //
-// # Known Limitation
+// This package only builds on macOS (darwin) due to Contacts.framework
+// dependency. All .go files use //go:build darwin.
 //
-// On some macOS versions/account backends, Contacts.framework may report success
-// for group membership removal while membership remains unchanged.
+// # Notes Field
 //
-// Workaround rationale: removing members from the Contacts app UI (and the same
-// operation through the Contacts AppleScript dictionary) can persist for records
-// where the direct Contacts.framework removeMember path does not. To avoid false
-// success, this package routes group-member removal through an AppleScript-backed
-// path and still verifies membership post-write. If state does not persist,
-// Mutate/Upsert return typed errors rather than reporting success.
+// The CNContactNoteKey requires the com.apple.developer.contacts.notes
+// entitlement on macOS 13+. This package intentionally omits the Note field
+// from default fetch requests to avoid error 134092. The Note field on
+// [CreateContactInput] is still settable (writes do not require the entitlement),
+// but fetched contacts will have an empty Note unless the calling app has
+// the notes entitlement.
 //
-// On iOS 13/macOS 13 and later, reading or writing the note field requires the
-// managed entitlement `com.apple.developer.contacts.notes`.
+// # Testing
 //
-// This package intentionally does not expose contact note operations.
-//
-// If note reads/writes are required, use Contacts AppleScript directly.
-// AppleScript can read/write notes, but it does not expose explicit
-// account/container routing and does not provide the same typed
-// authorization/error surface as this package.
-//
-// # Composition Examples
-//
-// 1) Update one matched contact organization:
-//
-//	findOut, err := contacts.Find(contacts.FindInput{
-//		Query: contacts.Query{NameContains: "Priya", OrganizationContains: "Acme"},
-//		Page:  contacts.Page{Limit: 20},
-//	})
-//	if err != nil || len(findOut.Refs) == 0 {
-//		// handle
-//	}
-//
-//	_, err = contacts.Mutate(contacts.MutateInput{
-//		Refs: []contacts.Ref{findOut.Refs[0]},
-//		Ops: []contacts.MutationOp{{
-//			Type:  contacts.MutationSetOrganization,
-//			Value: "Acme Ventures",
-//		}},
-//	})
-//
-// 2) Create a group and add matching contacts:
-//
-//	groupsOut, err := contacts.Groups(contacts.GroupsInput{
-//		Action: contacts.GroupsActionCreate,
-//		Name:   "Vendors 2026",
-//	})
-//	if err != nil {
-//		// handle
-//	}
-//
-//	var groupID string
-//	for _, result := range groupsOut.Results {
-//		if result.Succeeded && result.Group.ID != "" {
-//			groupID = result.Group.ID
-//		}
-//	}
-//
-//	findOut, err = contacts.Find(contacts.FindInput{
-//		Query: contacts.Query{EmailDomain: "vendorco.com"},
-//		Page:  contacts.Page{Limit: 200},
-//	})
-//	if err != nil {
-//		// handle
-//	}
-//
-//	_, err = contacts.Mutate(contacts.MutateInput{
-//		Refs: findOut.Refs,
-//		Ops:  []contacts.MutationOp{{Type: contacts.MutationAddToGroup, Value: groupID}},
-//	})
-//
-// 3) Upsert lifecycle (create then patch):
-//
-//	upsertOut, err := contacts.Upsert(contacts.UpsertInput{
-//		Create: []contacts.ContactDraft{{
-//			GivenName:    "Dr.",
-//			FamilyName:   "Lee",
-//			Organization: "Lee Clinic",
-//			Emails:       []contacts.LabeledValue{{Label: "work", Value: "dr.lee@clinic.example"}},
-//		}},
-//	})
-//	if err != nil {
-//		// handle
-//	}
-//
-//	created := upsertOut.Results[0].Ref
-//	_, err = contacts.Upsert(contacts.UpsertInput{
-//		Patch: []contacts.ContactPatch{{
-//			Ref: created,
-//			Changes: contacts.ContactChanges{
-//				JobTitle: ptr("Primary Physician"),
-//			},
-//		}},
-//	})
-//
-//nolint:revive // package comment documents API composition examples.
+// Tests create their own test data and clean up afterward, never touching the
+// user's existing contacts. Live tests run by default but require Contacts
+// access to be granted to the terminal/IDE.
 package contacts

@@ -1,380 +1,558 @@
+//go:build darwin
+
 package contacts
 
 import (
-	"errors"
+	"context"
 	"fmt"
-	"time"
+	"iter"
+	"os/exec"
+	"strings"
 )
 
-// ErrUnsupportedPlatform is returned when the contacts backend is unavailable on
-// the current OS/runtime.
-var ErrUnsupportedPlatform = errors.New("contacts: unsupported platform")
+// ---------------------------------------------------------------------
+// Contact types
+// ---------------------------------------------------------------------
 
-// AuthStatus describes Contacts permission state for the current process.
-type AuthStatus string
+// ContactType distinguishes person contacts from organization contacts.
+type ContactType int
 
 const (
-	// AuthStatusNotDetermined indicates access has not been requested yet.
-	AuthStatusNotDetermined AuthStatus = "not_determined"
-	// AuthStatusRestricted indicates policy restrictions prevent access.
-	AuthStatusRestricted AuthStatus = "restricted"
-	// AuthStatusDenied indicates the user denied access.
-	AuthStatusDenied AuthStatus = "denied"
-	// AuthStatusAuthorized indicates Contacts access is granted.
-	AuthStatusAuthorized AuthStatus = "authorized"
+	// ContactTypePerson is a person contact (default).
+	ContactTypePerson ContactType = 0
+	// ContactTypeOrganization is an organization contact.
+	ContactTypeOrganization ContactType = 1
 )
 
-// ErrorCode classifies backend errors from Contacts.framework.
-type ErrorCode string
-
-const (
-	// ErrorCodePermissionDenied indicates authorization is missing.
-	ErrorCodePermissionDenied ErrorCode = "permission_denied"
-	// ErrorCodeNotFound indicates a referenced contact/group does not exist.
-	ErrorCodeNotFound ErrorCode = "not_found"
-	// ErrorCodeConflict indicates write conflicts or duplicate state.
-	ErrorCodeConflict ErrorCode = "conflict"
-	// ErrorCodeValidation indicates invalid input or policy validation failures.
-	ErrorCodeValidation ErrorCode = "validation"
-	// ErrorCodeStore indicates a storage/backend failure.
-	ErrorCodeStore ErrorCode = "store"
-	// ErrorCodeUnknown indicates an unmapped error.
-	ErrorCodeUnknown ErrorCode = "unknown"
-)
-
-// Error is a typed package error for backend operations.
-type Error struct {
-	Code    ErrorCode
-	Message string
+// LabeledValue pairs a label (e.g. "home", "work") with a value.
+// The Identifier is assigned by the Contacts framework and is stable across
+// fetches. It is empty for values that have not yet been persisted.
+type LabeledValue[T any] struct {
+	Identifier string
+	Label      string
+	Value      T
 }
 
-// Error returns the formatted error message.
-func (e *Error) Error() string {
-	if e == nil {
-		return "contacts: <nil>"
-	}
-	if e.Message == "" {
-		return fmt.Sprintf("contacts: %s", e.Code)
-	}
-	return fmt.Sprintf("contacts: %s: %s", e.Code, e.Message)
+// PostalAddress holds a structured mailing address.
+type PostalAddress struct {
+	Street     string
+	City       string
+	State      string
+	PostalCode string
+	Country    string
+	ISOCountryCode string
 }
 
-// Ref is a stable contact reference shared across primitives.
-//
-// ContainerID and AccountID are included for account/container-scoped workflows.
-// AccountID is backend-defined and may equal ContainerID when the platform does
-// not expose a distinct account identifier.
-type Ref struct {
-	ID          string
-	ContainerID string
-	AccountID   string
-}
-
-// GroupRef is a stable group reference shared across group operations.
-type GroupRef struct {
-	ID          string
-	ContainerID string
-	AccountID   string
-}
-
-// MatchPolicy controls query clause evaluation.
-type MatchPolicy string
-
-const (
-	// MatchAll requires all populated Query clauses to match.
-	MatchAll MatchPolicy = "all"
-	// MatchAny requires at least one populated Query clause to match.
-	MatchAny MatchPolicy = "any"
-)
-
-// Query captures typed selection filters for Find.
-type Query struct {
-	NameContains         string
-	OrganizationContains string
-	EmailDomain          string
-	GroupIDsAny          []string
-	IDs                  []string
-	Match                MatchPolicy
-}
-
-// Page controls paginated find output.
-type Page struct {
-	Limit  int
-	Cursor string
-}
-
-// SortField controls find ordering.
-type SortField string
-
-const (
-	// SortByGivenName orders by given name then family name.
-	SortByGivenName SortField = "given_name"
-	// SortByFamilyName orders by family name then given name.
-	SortByFamilyName SortField = "family_name"
-)
-
-// SortOrder controls ascending/descending order.
-type SortOrder string
-
-const (
-	// SortOrderAsc sorts ascending.
-	SortOrderAsc SortOrder = "asc"
-	// SortOrderDesc sorts descending.
-	SortOrderDesc SortOrder = "desc"
-)
-
-// Sort controls Find ordering.
-type Sort struct {
-	By    SortField
-	Order SortOrder
-}
-
-// Meta is optional lightweight metadata aligned with FindOutput.Refs.
-type Meta struct {
-	Ref          Ref
-	DisplayName  string
-	Organization string
-	ModifiedAt   time.Time
-}
-
-// FindInput is the selection primitive request.
-type FindInput struct {
-	Query       Query
-	Page        Page
-	Sort        Sort
-	IncludeMeta bool
-}
-
-// FindOutput is the selection primitive response.
-//
-// NextCursor is empty when no more pages are available.
-type FindOutput struct {
-	Refs       []Ref
-	Meta       []Meta
-	NextCursor string
-}
-
-// Field selects logical data for Get hydration.
-type Field string
-
-const (
-	// FieldNames requests core name fields.
-	FieldNames Field = "names"
-	// FieldOrganization requests organization/title fields.
-	FieldOrganization Field = "organization"
-	// FieldEmails requests email addresses.
-	FieldEmails Field = "emails"
-	// FieldPhones requests phone numbers.
-	FieldPhones Field = "phones"
-	// FieldGroups requests group memberships.
-	FieldGroups Field = "groups"
-)
-
-// LabeledValue is a simple labeled string value (email/phone).
-type LabeledValue struct {
-	Label string
-	Value string
-}
-
-// Item is the hydrated contact model.
-type Item struct {
-	Ref
-	GivenName    string
-	FamilyName   string
-	MiddleName   string
-	Nickname     string
-	Organization string
-	JobTitle     string
-	Emails       []LabeledValue
-	Phones       []LabeledValue
-	GroupIDs     []string
-	ModifiedAt   time.Time
-}
-
-// GetInput hydrates refs into typed contact items.
-type GetInput struct {
-	Refs   []Ref
-	Fields []Field
-}
-
-// GetOutput contains hydrated contacts.
-type GetOutput struct {
-	Items []Item
-}
-
-// ContactDraft is the create model for Upsert.
-type ContactDraft struct {
-	ContainerID  string
-	GivenName    string
-	FamilyName   string
-	MiddleName   string
-	Nickname     string
-	Organization string
-	JobTitle     string
-	Emails       []LabeledValue
-	Phones       []LabeledValue
-	GroupIDs     []string
-}
-
-// ContactChanges is a typed patch for Upsert existing contacts.
-//
-// Nil pointer fields mean "no change". Non-nil pointer fields set/replace the
-// corresponding scalar field. Emails/Phones pointers allow explicit replacement
-// including clearing by providing an empty slice pointer.
-type ContactChanges struct {
-	GivenName      *string
-	FamilyName     *string
-	MiddleName     *string
-	Nickname       *string
-	Organization   *string
-	JobTitle       *string
-	Emails         *[]LabeledValue
-	Phones         *[]LabeledValue
-	AddGroupIDs    []string
-	RemoveGroupIDs []string
-}
-
-// ContactPatch applies ContactChanges to a target Ref.
-type ContactPatch struct {
-	Ref     Ref
-	Changes ContactChanges
-}
-
-// UpsertInput creates and patches contacts.
-type UpsertInput struct {
-	Create []ContactDraft
-	Patch  []ContactPatch
-}
-
-// WriteResult reports per-item write status.
-type WriteResult struct {
-	Ref       Ref
-	Succeeded bool
-	Created   bool
-	Updated   bool
-	Err       error
-}
-
-// UpsertOutput reports per-create/per-patch results.
-type UpsertOutput struct {
-	Results []WriteResult
-}
-
-// MutationType enumerates explicit mutable operations.
-type MutationType string
-
-const (
-	// MutationSetOrganization replaces the organization field.
-	MutationSetOrganization MutationType = "set_organization"
-	// MutationSetJobTitle replaces the job title field.
-	MutationSetJobTitle MutationType = "set_job_title"
-	// MutationSetGivenName replaces the given name field.
-	MutationSetGivenName MutationType = "set_given_name"
-	// MutationSetFamilyName replaces the family name field.
-	MutationSetFamilyName MutationType = "set_family_name"
-	// MutationAddToGroup adds the contact to a group ID in Value.
-	MutationAddToGroup MutationType = "add_to_group"
-	// MutationRemoveFromGroup removes the contact from a group ID in Value.
-	MutationRemoveFromGroup MutationType = "remove_from_group"
-	// MutationDelete deletes the contact.
-	MutationDelete MutationType = "delete"
-)
-
-// MutationOp is one explicit state transition.
-type MutationOp struct {
-	Type  MutationType
-	Value string
-}
-
-// MutateInput applies ops to each target Ref.
-type MutateInput struct {
-	Refs []Ref
-	Ops  []MutationOp
-}
-
-// MutateOutput reports per-ref mutation status.
-type MutateOutput struct {
-	Results []WriteResult
-}
-
-// Group stores discoverable group metadata.
-type Group struct {
-	GroupRef
+// ContactRelation holds a related contact name.
+type ContactRelation struct {
 	Name string
 }
 
-// GroupsAction selects a group operation.
-type GroupsAction string
+// SocialProfile holds a social-network profile reference.
+type SocialProfile struct {
+	URLString string
+	Username  string
+	Service   string
+}
 
-const (
-	// GroupsActionList lists current groups.
-	GroupsActionList GroupsAction = "list"
-	// GroupsActionCreate creates a new group.
-	GroupsActionCreate GroupsAction = "create"
-	// GroupsActionRename renames an existing group.
-	GroupsActionRename GroupsAction = "rename"
-	// GroupsActionDelete deletes an existing group.
-	GroupsActionDelete GroupsAction = "delete"
-)
+// InstantMessage holds an instant-messaging handle.
+type InstantMessage struct {
+	Username string
+	Service  string
+}
 
-// GroupsInput is the request for Groups.
+// DateComponents holds a date without requiring a full time.Time.
+// Month and Day are 1-based. Any field may be zero if not set.
+type DateComponents struct {
+	Year  int
+	Month int
+	Day   int
+}
+
+// Contact is the read model for a macOS contact.
 //
-// For create, set Name and optional ContainerID.
-// For rename, set Group.ID and Name.
-// For delete, set Group.ID.
-type GroupsInput struct {
-	Action      GroupsAction
-	Group       GroupRef
-	Name        string
+// Fields are populated based on what was requested via the keys-to-fetch
+// mechanism of the Contacts.framework. Unset multi-value fields are nil
+// (not empty slices).
+type Contact struct {
+	Identifier        string
+	ContactType       ContactType
+	NamePrefix        string
+	GivenName         string
+	MiddleName        string
+	FamilyName        string
+	PreviousFamilyName string
+	NameSuffix        string
+	Nickname          string
+	PhoneticGivenName string
+	PhoneticMiddleName string
+	PhoneticFamilyName string
+	OrganizationName  string
+	DepartmentName    string
+	JobTitle          string
+	Note              string
+	Birthday          *DateComponents
+	PhoneNumbers      []LabeledValue[string]
+	EmailAddresses    []LabeledValue[string]
+	PostalAddresses   []LabeledValue[PostalAddress]
+	URLAddresses      []LabeledValue[string]
+	ContactRelations  []LabeledValue[ContactRelation]
+	SocialProfiles    []LabeledValue[SocialProfile]
+	InstantMessages   []LabeledValue[InstantMessage]
+	Dates             []LabeledValue[DateComponents]
+	ImageDataAvailable bool
+	ImageData          []byte
+	ThumbnailImageData []byte
+}
+
+// CreateContactInput specifies fields for a new contact.
+//
+// Only non-zero/non-nil fields are set on the created contact. The Contacts
+// framework assigns the identifier.
+type CreateContactInput struct {
+	ContactType       ContactType
+	NamePrefix        string
+	GivenName         string
+	MiddleName        string
+	FamilyName        string
+	PreviousFamilyName string
+	NameSuffix        string
+	Nickname          string
+	PhoneticGivenName string
+	PhoneticMiddleName string
+	PhoneticFamilyName string
+	OrganizationName  string
+	DepartmentName    string
+	JobTitle          string
+	Note              string
+	Birthday          *DateComponents
+	PhoneNumbers      []LabeledValue[string]
+	EmailAddresses    []LabeledValue[string]
+	PostalAddresses   []LabeledValue[PostalAddress]
+	URLAddresses      []LabeledValue[string]
+	ContactRelations  []LabeledValue[ContactRelation]
+	SocialProfiles    []LabeledValue[SocialProfile]
+	InstantMessages   []LabeledValue[InstantMessage]
+	Dates             []LabeledValue[DateComponents]
+	ImageData         []byte
+	// ContainerID is the container to add the contact to.
+	// If empty, the default container is used.
 	ContainerID string
 }
 
-// GroupResult reports mutating group operation status.
-type GroupResult struct {
-	Group     GroupRef
-	Succeeded bool
-	Created   bool
-	Updated   bool
-	Err       error
+// FilterOp specifies how a filter matches against a field value.
+type FilterOp int
+
+const (
+	// FilterEquals matches when the field value equals the filter value
+	// (case-insensitive).
+	FilterEquals FilterOp = iota
+	// FilterContains matches when the field value contains the filter value
+	// (case-insensitive).
+	FilterContains
+	// FilterNotContains matches when the field value does not contain the
+	// filter value (case-insensitive).
+	FilterNotContains
+)
+
+// Filter specifies a single field-level filter for listing contacts.
+//
+// FieldName should be one of the contact field names as used by the Contacts
+// framework key constants (e.g. "givenName", "familyName", "emailAddresses",
+// "phoneNumbers", "organizationName").
+type Filter struct {
+	FieldName string
+	Value     string
+	Op        FilterOp
 }
 
-// GroupsOutput contains current group catalog and mutating results.
-type GroupsOutput struct {
-	Groups  []Group
-	Results []GroupResult
+// ListContactsInput controls contact enumeration.
+//
+// Filters are ANDed together. Offset controls the starting position for
+// pagination (0-based).
+type ListContactsInput struct {
+	Filters []Filter
+	Offset  int
 }
 
-// AuthorizationStatus returns the current contacts permission status.
-func AuthorizationStatus() (AuthStatus, error) {
-	return authorizationStatus()
+// ---------------------------------------------------------------------
+// Group types
+// ---------------------------------------------------------------------
+
+// Group represents a macOS contact group.
+//
+// ParentGroupID is non-empty when this group is a subgroup of another group.
+// It is discovered by enumerating group membership in containers.
+type Group struct {
+	Identifier    string
+	Name          string
+	ContainerID   string
+	ParentGroupID string
+	SubgroupIDs   []string
 }
 
-// RequestAccess requests contacts permission for the current process.
-func RequestAccess() error {
-	return requestAccess()
+// CreateGroupInput specifies parameters for creating a new group.
+type CreateGroupInput struct {
+	Name string
+	// ContainerID is the container to add the group to.
+	// If empty, the default container is used.
+	ContainerID string
+	// ParentGroupID, if non-empty, makes this group a subgroup of the
+	// specified parent group.
+	ParentGroupID string
 }
 
-// Find selects contact refs using typed filters and pagination.
-func Find(input FindInput) (FindOutput, error) {
-	return find(input)
+// ---------------------------------------------------------------------
+// Container types
+// ---------------------------------------------------------------------
+
+// ContainerType identifies the backing store type for a container.
+type ContainerType int
+
+const (
+	// ContainerTypeUnassigned is an unknown container type.
+	ContainerTypeUnassigned ContainerType = 0
+	// ContainerTypeLocal is a local on-device container.
+	ContainerTypeLocal ContainerType = 1
+	// ContainerTypeExchange is an Exchange container.
+	ContainerTypeExchange ContainerType = 2
+	// ContainerTypeCardDAV is a CardDAV container (e.g. iCloud).
+	ContainerTypeCardDAV ContainerType = 3
+)
+
+// Container represents a contacts container (account/store).
+type Container struct {
+	Identifier    string
+	Name          string
+	ContainerType ContainerType
 }
 
-// Get hydrates refs into typed contacts.
-func Get(input GetInput) (GetOutput, error) {
-	return get(input)
+// AuthorizationStatus reflects the app's authorization to access contacts.
+type AuthorizationStatus int
+
+const (
+	AuthorizationStatusNotDetermined AuthorizationStatus = 0
+	AuthorizationStatusRestricted   AuthorizationStatus = 1
+	AuthorizationStatusDenied       AuthorizationStatus = 2
+	AuthorizationStatusAuthorized   AuthorizationStatus = 3
+)
+
+// String returns a human-readable representation of the authorization status.
+func (s AuthorizationStatus) String() string {
+	switch s {
+	case AuthorizationStatusNotDetermined:
+		return "not_determined"
+	case AuthorizationStatusRestricted:
+		return "restricted"
+	case AuthorizationStatusDenied:
+		return "denied"
+	case AuthorizationStatusAuthorized:
+		return "authorized"
+	default:
+		return fmt.Sprintf("unknown(%d)", int(s))
+	}
 }
 
-// Upsert creates new contacts and patches existing contacts.
-func Upsert(input UpsertInput) (UpsertOutput, error) {
-	return upsert(input)
+// String returns a human-readable representation of the container type.
+func (t ContainerType) String() string {
+	switch t {
+	case ContainerTypeUnassigned:
+		return "unassigned"
+	case ContainerTypeLocal:
+		return "local"
+	case ContainerTypeExchange:
+		return "exchange"
+	case ContainerTypeCardDAV:
+		return "cardDAV"
+	default:
+		return fmt.Sprintf("unknown(%d)", int(t))
+	}
 }
 
-// Mutate applies explicit state transition ops to target refs.
-func Mutate(input MutateInput) (MutateOutput, error) {
-	return mutate(input)
+// String returns a human-readable representation of the contact type.
+func (t ContactType) String() string {
+	switch t {
+	case ContactTypePerson:
+		return "person"
+	case ContactTypeOrganization:
+		return "organization"
+	default:
+		return fmt.Sprintf("unknown(%d)", int(t))
+	}
 }
 
-// Groups lists and mutates contact groups.
-func Groups(input GroupsInput) (GroupsOutput, error) {
-	return groups(input)
+// FullName returns a simple concatenation of name parts for display.
+// For organization contacts, it returns OrganizationName if no given/family
+// name is set.
+func (c Contact) FullName() string {
+	parts := make([]string, 0, 5)
+	if c.NamePrefix != "" {
+		parts = append(parts, c.NamePrefix)
+	}
+	if c.GivenName != "" {
+		parts = append(parts, c.GivenName)
+	}
+	if c.MiddleName != "" {
+		parts = append(parts, c.MiddleName)
+	}
+	if c.FamilyName != "" {
+		parts = append(parts, c.FamilyName)
+	}
+	if c.NameSuffix != "" {
+		parts = append(parts, c.NameSuffix)
+	}
+	if len(parts) == 0 && c.OrganizationName != "" {
+		return c.OrganizationName
+	}
+	result := ""
+	for i, p := range parts {
+		if i > 0 {
+			result += " "
+		}
+		result += p
+	}
+	return result
 }
+
+// Now stub out the function signatures. The actual implementations delegate
+// to the cgo bridge in bridge.go.
+
+// CheckAuthorization returns the current authorization status for accessing
+// contacts. This does not prompt the user.
+func CheckAuthorization(_ context.Context) AuthorizationStatus {
+	return AuthorizationStatus(checkAuthorizationStatus())
+}
+
+// RequestAuthorization requests access to contacts from the user.
+// Returns the resulting authorization status and any error.
+//
+// On macOS 15+, this may prompt the user for limited vs full access.
+func RequestAuthorization(ctx context.Context) (AuthorizationStatus, error) {
+	status, errStr := requestAccess()
+	if errStr != "" {
+		return AuthorizationStatus(status), fmt.Errorf("contacts: authorization request failed: %s", errStr)
+	}
+	return AuthorizationStatus(status), nil
+}
+
+// GetContact fetches a single contact by identifier.
+// Returns all available contact fields.
+func GetContact(ctx context.Context, identifier string) (Contact, error) {
+	if identifier == "" {
+		return Contact{}, fmt.Errorf("contacts: identifier is required")
+	}
+	c, errStr := getContact(identifier)
+	if errStr != "" {
+		return Contact{}, fmt.Errorf("contacts: get contact failed: %s", errStr)
+	}
+	return c, nil
+}
+
+// ListContacts returns an iterator over contacts matching the given filters.
+//
+// The iterator yields contacts one at a time and stops early if the context
+// is cancelled. Errors during enumeration are yielded as the error value and
+// the iterator stops.
+//
+// Example:
+//
+//	for contact, err := range contacts.ListContacts(ctx, contacts.ListContactsInput{
+//		Filters: []contacts.Filter{
+//			{FieldName: "givenName", Value: "John", Op: contacts.FilterContains},
+//		},
+//	}) {
+//		if err != nil { /* handle */ }
+//		fmt.Println(contact.GivenName, contact.FamilyName)
+//	}
+func ListContacts(ctx context.Context, input ListContactsInput) iter.Seq2[Contact, error] {
+	return func(yield func(Contact, error) bool) {
+		contacts, errStr := listContacts(input.Filters)
+		if errStr != "" {
+			yield(Contact{}, fmt.Errorf("contacts: list contacts failed: %s", errStr))
+			return
+		}
+		skipped := 0
+		for _, c := range contacts {
+			if ctx.Err() != nil {
+				yield(Contact{}, ctx.Err())
+				return
+			}
+			if skipped < input.Offset {
+				skipped++
+				continue
+			}
+			if !yield(c, nil) {
+				return
+			}
+		}
+	}
+}
+
+// CreateContact creates a new contact and returns the created contact with
+// its assigned identifier.
+func CreateContact(ctx context.Context, input CreateContactInput) (Contact, error) {
+	identifier, errStr := createContact(input)
+	if errStr != "" {
+		return Contact{}, fmt.Errorf("contacts: create contact failed: %s", errStr)
+	}
+	return GetContact(ctx, identifier)
+}
+
+// DeleteContact deletes the contact with the given identifier.
+func DeleteContact(ctx context.Context, identifier string) error {
+	if identifier == "" {
+		return fmt.Errorf("contacts: identifier is required")
+	}
+	if errStr := deleteContact(identifier); errStr != "" {
+		return fmt.Errorf("contacts: delete contact failed: %s", errStr)
+	}
+	return nil
+}
+
+// GetGroup fetches a single group by identifier, including its parent and
+// subgroup relationships.
+func GetGroup(ctx context.Context, identifier string) (Group, error) {
+	if identifier == "" {
+		return Group{}, fmt.Errorf("contacts: identifier is required")
+	}
+	groups, errStr := listGroups("")
+	if errStr != "" {
+		return Group{}, fmt.Errorf("contacts: get group failed: %s", errStr)
+	}
+	for _, g := range groups {
+		if g.Identifier == identifier {
+			return g, nil
+		}
+	}
+	return Group{}, fmt.Errorf("contacts: group %q not found", identifier)
+}
+
+// ListGroups returns all groups, optionally filtered to a specific container.
+// Each group includes its parent/child relationships.
+//
+// Pass containerID="" to list groups from all containers.
+func ListGroups(ctx context.Context, containerID string) ([]Group, error) {
+	groups, errStr := listGroups(containerID)
+	if errStr != "" {
+		return nil, fmt.Errorf("contacts: list groups failed: %s", errStr)
+	}
+	return groups, nil
+}
+
+// CreateGroup creates a new group and returns it with its assigned identifier.
+func CreateGroup(ctx context.Context, input CreateGroupInput) (Group, error) {
+	if input.Name == "" {
+		return Group{}, fmt.Errorf("contacts: group name is required")
+	}
+	identifier, errStr := createGroup(input)
+	if errStr != "" {
+		return Group{}, fmt.Errorf("contacts: create group failed: %s", errStr)
+	}
+	return GetGroup(ctx, identifier)
+}
+
+// DeleteGroup deletes the group with the given identifier.
+// The Contacts framework determines whether a group with contacts can be
+// deleted (contacts themselves are not deleted).
+func DeleteGroup(ctx context.Context, identifier string) error {
+	if identifier == "" {
+		return fmt.Errorf("contacts: identifier is required")
+	}
+	if errStr := deleteGroup(identifier); errStr != "" {
+		return fmt.Errorf("contacts: delete group failed: %s", errStr)
+	}
+	return nil
+}
+
+// AddContactToGroup adds a contact to a group.
+func AddContactToGroup(ctx context.Context, contactID, groupID string) error {
+	if contactID == "" || groupID == "" {
+		return fmt.Errorf("contacts: contactID and groupID are required")
+	}
+	if errStr := addContactToGroup(contactID, groupID); errStr != "" {
+		return fmt.Errorf("contacts: add contact to group failed: %s", errStr)
+	}
+	return nil
+}
+
+// RemoveContactFromGroup removes a contact from a group.
+//
+// This uses osascript (AppleScript) to perform the removal because the
+// Contacts.framework CNSaveRequest removeMember:fromGroup: method has a
+// known bug on macOS 14.6+ / 15.x where the removal silently fails.
+// The AppleScript "remove <person> from <group>" command works reliably.
+func RemoveContactFromGroup(ctx context.Context, contactID, groupID string) error {
+	if contactID == "" || groupID == "" {
+		return fmt.Errorf("contacts: contactID and groupID are required")
+	}
+	return removeContactFromGroupViaOSAScript(ctx, contactID, groupID)
+}
+
+// removeContactFromGroupViaOSAScript uses osascript to remove a contact
+// from a group, working around the CNSaveRequest removeMember:fromGroup: bug.
+func removeContactFromGroupViaOSAScript(ctx context.Context, contactID, groupID string) error {
+	// Sanitize identifiers to prevent AppleScript injection.
+	// Contact/group IDs are UUID:type strings (e.g. "ABC-123:ABPerson").
+	// We reject any identifier containing a double-quote character.
+	if strings.Contains(contactID, `"`) || strings.Contains(groupID, `"`) {
+		return fmt.Errorf("contacts: invalid identifier (contains quote)")
+	}
+
+	script := fmt.Sprintf(`tell application "Contacts"
+	set thePerson to first person whose id is "%s"
+	set theGroup to first group whose id is "%s"
+	remove thePerson from theGroup
+	save
+end tell`, contactID, groupID)
+
+	cmd := exec.CommandContext(ctx, "osascript", "-e", script)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("contacts: osascript remove member failed: %s (output: %s)",
+			err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// GetContainer fetches a single container by identifier.
+func GetContainer(ctx context.Context, identifier string) (Container, error) {
+	if identifier == "" {
+		return Container{}, fmt.Errorf("contacts: identifier is required")
+	}
+	c, errStr := getContainer(identifier)
+	if errStr != "" {
+		return Container{}, fmt.Errorf("contacts: get container failed: %s", errStr)
+	}
+	return c, nil
+}
+
+// ListContainers returns all available containers.
+func ListContainers(ctx context.Context) ([]Container, error) {
+	containers, errStr := listContainers()
+	if errStr != "" {
+		return nil, fmt.Errorf("contacts: list containers failed: %s", errStr)
+	}
+	return containers, nil
+}
+
+// DefaultContainerID returns the identifier of the default container.
+func DefaultContainerID(ctx context.Context) (string, error) {
+	id, errStr := defaultContainerID()
+	if errStr != "" {
+		return "", fmt.Errorf("contacts: default container failed: %s", errStr)
+	}
+	return id, nil
+}
+
+// ListContactsInGroup returns contacts that are members of the specified group.
+func ListContactsInGroup(ctx context.Context, groupID string) ([]Contact, error) {
+	if groupID == "" {
+		return nil, fmt.Errorf("contacts: groupID is required")
+	}
+	contacts, errStr := listContactsInGroup(groupID)
+	if errStr != "" {
+		return nil, fmt.Errorf("contacts: list contacts in group failed: %s", errStr)
+	}
+	return contacts, nil
+}
+
