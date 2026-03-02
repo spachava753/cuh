@@ -88,12 +88,10 @@ func ExampleCreateContact_batch() {
 	suffix := strconv.FormatInt(time.Now().UnixNano(), 10)
 	inputs := []contacts.CreateContactInput{
 		{
-			Contact:     contacts.Contact{GivenName: "Batch" + suffix + "A", FamilyName: "Example"},
-			ContainerID: defaultContainerID,
+			Contact: contacts.Contact{GivenName: "Batch" + suffix + "A", FamilyName: "Example", ContainerID: defaultContainerID},
 		},
 		{
-			Contact:     contacts.Contact{GivenName: "Batch" + suffix + "B", FamilyName: "Example"},
-			ContainerID: defaultContainerID,
+			Contact: contacts.Contact{GivenName: "Batch" + suffix + "B", FamilyName: "Example", ContainerID: defaultContainerID},
 		},
 	}
 
@@ -138,8 +136,8 @@ func ExampleAddContactToGroup_syncSelection() {
 
 	family := "ExampleSync" + suffix
 	seedContacts := []contacts.CreateContactInput{
-		{Contact: contacts.Contact{GivenName: "Sync" + suffix + "A", FamilyName: family, JobTitle: "Engineer"}, ContainerID: containerID},
-		{Contact: contacts.Contact{GivenName: "Sync" + suffix + "B", FamilyName: family, JobTitle: "Designer"}, ContainerID: containerID},
+		{Contact: contacts.Contact{GivenName: "Sync" + suffix + "A", FamilyName: family, JobTitle: "Engineer", ContainerID: containerID}},
+		{Contact: contacts.Contact{GivenName: "Sync" + suffix + "B", FamilyName: family, JobTitle: "Designer", ContainerID: containerID}},
 	}
 
 	createdIDs := make([]string, 0, len(seedContacts))

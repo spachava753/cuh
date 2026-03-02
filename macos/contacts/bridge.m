@@ -152,11 +152,20 @@ static NSArray<id<CNKeyDescriptor>> *allContactKeys(void) {
     ];
 }
 
-static CContact convert_contact(CNContact *contact) {
+static CContact convert_contact(CNContactStore *store, CNContact *contact, NSError **error) {
     CContact cc;
     memset(&cc, 0, sizeof(CContact));
 
     cc.identifier = cstring_from_nsstring(contact.identifier);
+
+    NSArray<CNContainer *> *containers = [store containersMatchingPredicate:[CNContainer predicateForContainerOfContactWithIdentifier:contact.identifier] error:error];
+    if (error != NULL && *error != nil) {
+        return cc;
+    }
+    if (containers.count > 0 && containers[0].identifier != nil) {
+        cc.containerID = cstring_from_nsstring(containers[0].identifier);
+    }
+
     cc.contactType = (int)contact.contactType;
 
     // Guard each field access with isKeyAvailable to avoid exceptions
@@ -798,7 +807,13 @@ CContactResult bridge_get_contact(BridgeString identifier) {
             result.error = cstring_from_nsstring([NSString stringWithFormat:@"contact %@ not found", ident]);
             return result;
         }
-        result.contact = convert_contact(contact);
+        result.contact = convert_contact(store, contact, &error);
+        if (error != nil) {
+            result.error = cstring_from_error(error);
+            bridge_free_contact(&result.contact);
+            memset(&result.contact, 0, sizeof(CContact));
+            return result;
+        }
     }
     return result;
 }
@@ -830,7 +845,17 @@ CContactListResult bridge_list_contacts(CFilter *filters, int filterCount) {
         if (result.count > 0) {
             result.contacts = (CContact *)malloc(sizeof(CContact) * result.count);
             for (int i = 0; i < result.count; i++) {
-                result.contacts[i] = convert_contact(matched[i]);
+                result.contacts[i] = convert_contact(store, matched[i], &error);
+                if (error != nil) {
+                    result.error = cstring_from_error(error);
+                    for (int j = 0; j <= i; j++) {
+                        bridge_free_contact(&result.contacts[j]);
+                    }
+                    free(result.contacts);
+                    result.contacts = NULL;
+                    result.count = 0;
+                    return result;
+                }
             }
         }
     }
@@ -1391,7 +1416,17 @@ CContactListResult bridge_list_contacts_in_group(BridgeString groupID) {
         if (result.count > 0) {
             result.contacts = (CContact *)malloc(sizeof(CContact) * result.count);
             for (int i = 0; i < result.count; i++) {
-                result.contacts[i] = convert_contact(contacts[i]);
+                result.contacts[i] = convert_contact(store, contacts[i], &error);
+                if (error != nil) {
+                    result.error = cstring_from_error(error);
+                    for (int j = 0; j <= i; j++) {
+                        bridge_free_contact(&result.contacts[j]);
+                    }
+                    free(result.contacts);
+                    result.contacts = NULL;
+                    result.count = 0;
+                    return result;
+                }
             }
         }
     }
@@ -1446,6 +1481,7 @@ static void free_labeled_date(CLabeledDateComponents *ld) {
 void bridge_free_contact(CContact *contact) {
     if (contact == NULL) return;
     free_cstring(&contact->identifier);
+    free_cstring(&contact->containerID);
     free_cstring(&contact->namePrefix);
     free_cstring(&contact->givenName);
     free_cstring(&contact->middleName);

@@ -86,6 +86,7 @@ typedef struct {
 // --- Contact ---
 typedef struct {
     BridgeString identifier;
+    BridgeString containerID;
     int     contactType;
     BridgeString namePrefix;
     BridgeString givenName;

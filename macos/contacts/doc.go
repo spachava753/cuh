@@ -123,8 +123,8 @@
 //
 //		results := make([]BatchCreateResult, 0, len(inputs))
 //		for _, in := range inputs {
-//			if in.ContainerID == "" {
-//				in.ContainerID = defaultContainerID
+//			if in.Contact.ContainerID == "" {
+//				in.Contact.ContainerID = defaultContainerID
 //			}
 //
 //			created, err := contacts.CreateContact(ctx, in)
@@ -282,7 +282,7 @@
 // The CNContactNoteKey requires the com.apple.developer.contacts.notes
 // entitlement on macOS 13+. This package intentionally omits the Note field
 // from default fetch requests to avoid error 134092. The Note field on
-// [CreateContactInput] is still settable (writes do not require the
+// [Contact] is still settable during create operations (writes do not require the
 // entitlement), but fetched contacts will have an empty Note unless the calling
 // app has the notes entitlement. For this reason, filter fields intentionally
 // do not expose a Note constant.

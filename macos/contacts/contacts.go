@@ -70,13 +70,15 @@ type DateComponents struct {
 	Day   int
 }
 
-// Contact is the read model for a macOS contact.
+// Contact is the model for a macOS contact.
 //
 // Fields are populated based on what was requested via the keys-to-fetch
-// mechanism of the Contacts.framework. Unset multi-value fields are nil
-// (not empty slices).
+// mechanism of the Contacts.framework. ContainerID identifies the owning
+// container/account when available. Unset multi-value fields are nil (not empty
+// slices).
 type Contact struct {
 	Identifier         string
+	ContainerID        string
 	ContactType        ContactType
 	NamePrefix         string
 	GivenName          string
@@ -110,12 +112,11 @@ type Contact struct {
 //
 // Only writable, non-zero/non-nil fields from Contact are set on the created
 // contact. Read-only fields (Identifier, ImageDataAvailable, and
-// ThumbnailImageData) are ignored.
+// ThumbnailImageData) are ignored. Contact.ContainerID selects the destination
+// container; if empty, the default container is used.
 type CreateContactInput struct {
-	Contact
-	// ContainerID is the container to add the contact to.
-	// If empty, the default container is used.
-	ContainerID string
+	// Contact defines the contact values to persist.
+	Contact Contact
 }
 
 // ContactField identifies a contact field that can be filtered.

@@ -44,6 +44,7 @@ func freeBridgeString(cs C.BridgeString) {
 func goContact(cc C.CContact) Contact {
 	c := Contact{
 		Identifier:         goString(cc.identifier),
+		ContainerID:        goString(cc.containerID),
 		ContactType:        ContactType(cc.contactType),
 		NamePrefix:         goString(cc.namePrefix),
 		GivenName:          goString(cc.givenName),
@@ -298,7 +299,7 @@ func listContacts(filters []Filter) ([]Contact, string) {
 func createContact(input CreateContactInput) (string, string) {
 	cc := buildCContact(input)
 	defer freeCContactInput(&cc)
-	containerID := makeBridgeString(input.ContainerID)
+	containerID := makeBridgeString(input.Contact.ContainerID)
 	defer freeBridgeString(containerID)
 
 	result := C.bridge_create_contact(cc, containerID)
@@ -488,35 +489,37 @@ func buildCContactFromContact(input Contact) C.CContact {
 }
 
 func buildCContact(input CreateContactInput) C.CContact {
+	contact := input.Contact
 	var cc C.CContact
-	cc.contactType = C.int(input.ContactType)
-	cc.namePrefix = makeBridgeString(input.NamePrefix)
-	cc.givenName = makeBridgeString(input.GivenName)
-	cc.middleName = makeBridgeString(input.MiddleName)
-	cc.familyName = makeBridgeString(input.FamilyName)
-	cc.previousFamilyName = makeBridgeString(input.PreviousFamilyName)
-	cc.nameSuffix = makeBridgeString(input.NameSuffix)
-	cc.nickname = makeBridgeString(input.Nickname)
-	cc.phoneticGivenName = makeBridgeString(input.PhoneticGivenName)
-	cc.phoneticMiddleName = makeBridgeString(input.PhoneticMiddleName)
-	cc.phoneticFamilyName = makeBridgeString(input.PhoneticFamilyName)
-	cc.organizationName = makeBridgeString(input.OrganizationName)
-	cc.departmentName = makeBridgeString(input.DepartmentName)
-	cc.jobTitle = makeBridgeString(input.JobTitle)
-	cc.note = makeBridgeString(input.Note)
+	cc.containerID = makeBridgeString(contact.ContainerID)
+	cc.contactType = C.int(contact.ContactType)
+	cc.namePrefix = makeBridgeString(contact.NamePrefix)
+	cc.givenName = makeBridgeString(contact.GivenName)
+	cc.middleName = makeBridgeString(contact.MiddleName)
+	cc.familyName = makeBridgeString(contact.FamilyName)
+	cc.previousFamilyName = makeBridgeString(contact.PreviousFamilyName)
+	cc.nameSuffix = makeBridgeString(contact.NameSuffix)
+	cc.nickname = makeBridgeString(contact.Nickname)
+	cc.phoneticGivenName = makeBridgeString(contact.PhoneticGivenName)
+	cc.phoneticMiddleName = makeBridgeString(contact.PhoneticMiddleName)
+	cc.phoneticFamilyName = makeBridgeString(contact.PhoneticFamilyName)
+	cc.organizationName = makeBridgeString(contact.OrganizationName)
+	cc.departmentName = makeBridgeString(contact.DepartmentName)
+	cc.jobTitle = makeBridgeString(contact.JobTitle)
+	cc.note = makeBridgeString(contact.Note)
 
-	if input.Birthday != nil {
+	if contact.Birthday != nil {
 		cc.hasBirthday = 1
 		cc.birthday = C.CDateComponents{
-			year:  C.int(input.Birthday.Year),
-			month: C.int(input.Birthday.Month),
-			day:   C.int(input.Birthday.Day),
+			year:  C.int(contact.Birthday.Year),
+			month: C.int(contact.Birthday.Month),
+			day:   C.int(contact.Birthday.Day),
 		}
 	}
 
-	if len(input.PhoneNumbers) > 0 {
-		phones := make([]C.CLabeledString, len(input.PhoneNumbers))
-		for i, p := range input.PhoneNumbers {
+	if len(contact.PhoneNumbers) > 0 {
+		phones := make([]C.CLabeledString, len(contact.PhoneNumbers))
+		for i, p := range contact.PhoneNumbers {
 			phones[i] = C.CLabeledString{
 				identifier: makeBridgeString(p.Identifier),
 				label:      makeBridgeString(p.Label),
@@ -527,9 +530,9 @@ func buildCContact(input CreateContactInput) C.CContact {
 		cc.phoneNumbersCount = C.int(len(phones))
 	}
 
-	if len(input.EmailAddresses) > 0 {
-		emails := make([]C.CLabeledString, len(input.EmailAddresses))
-		for i, e := range input.EmailAddresses {
+	if len(contact.EmailAddresses) > 0 {
+		emails := make([]C.CLabeledString, len(contact.EmailAddresses))
+		for i, e := range contact.EmailAddresses {
 			emails[i] = C.CLabeledString{
 				identifier: makeBridgeString(e.Identifier),
 				label:      makeBridgeString(e.Label),
@@ -540,9 +543,9 @@ func buildCContact(input CreateContactInput) C.CContact {
 		cc.emailAddressesCount = C.int(len(emails))
 	}
 
-	if len(input.PostalAddresses) > 0 {
-		addrs := make([]C.CLabeledPostalAddress, len(input.PostalAddresses))
-		for i, a := range input.PostalAddresses {
+	if len(contact.PostalAddresses) > 0 {
+		addrs := make([]C.CLabeledPostalAddress, len(contact.PostalAddresses))
+		for i, a := range contact.PostalAddresses {
 			addrs[i] = C.CLabeledPostalAddress{
 				identifier: makeBridgeString(a.Identifier),
 				label:      makeBridgeString(a.Label),
@@ -560,9 +563,9 @@ func buildCContact(input CreateContactInput) C.CContact {
 		cc.postalAddressesCount = C.int(len(addrs))
 	}
 
-	if len(input.URLAddresses) > 0 {
-		urls := make([]C.CLabeledString, len(input.URLAddresses))
-		for i, u := range input.URLAddresses {
+	if len(contact.URLAddresses) > 0 {
+		urls := make([]C.CLabeledString, len(contact.URLAddresses))
+		for i, u := range contact.URLAddresses {
 			urls[i] = C.CLabeledString{
 				identifier: makeBridgeString(u.Identifier),
 				label:      makeBridgeString(u.Label),
@@ -573,9 +576,9 @@ func buildCContact(input CreateContactInput) C.CContact {
 		cc.urlAddressesCount = C.int(len(urls))
 	}
 
-	if len(input.ContactRelations) > 0 {
-		rels := make([]C.CLabeledContactRelation, len(input.ContactRelations))
-		for i, r := range input.ContactRelations {
+	if len(contact.ContactRelations) > 0 {
+		rels := make([]C.CLabeledContactRelation, len(contact.ContactRelations))
+		for i, r := range contact.ContactRelations {
 			rels[i] = C.CLabeledContactRelation{
 				identifier: makeBridgeString(r.Identifier),
 				label:      makeBridgeString(r.Label),
@@ -586,9 +589,9 @@ func buildCContact(input CreateContactInput) C.CContact {
 		cc.contactRelationsCount = C.int(len(rels))
 	}
 
-	if len(input.SocialProfiles) > 0 {
-		profiles := make([]C.CLabeledSocialProfile, len(input.SocialProfiles))
-		for i, p := range input.SocialProfiles {
+	if len(contact.SocialProfiles) > 0 {
+		profiles := make([]C.CLabeledSocialProfile, len(contact.SocialProfiles))
+		for i, p := range contact.SocialProfiles {
 			profiles[i] = C.CLabeledSocialProfile{
 				identifier: makeBridgeString(p.Identifier),
 				label:      makeBridgeString(p.Label),
@@ -603,9 +606,9 @@ func buildCContact(input CreateContactInput) C.CContact {
 		cc.socialProfilesCount = C.int(len(profiles))
 	}
 
-	if len(input.InstantMessages) > 0 {
-		ims := make([]C.CLabeledInstantMessage, len(input.InstantMessages))
-		for i, im := range input.InstantMessages {
+	if len(contact.InstantMessages) > 0 {
+		ims := make([]C.CLabeledInstantMessage, len(contact.InstantMessages))
+		for i, im := range contact.InstantMessages {
 			ims[i] = C.CLabeledInstantMessage{
 				identifier: makeBridgeString(im.Identifier),
 				label:      makeBridgeString(im.Label),
@@ -619,9 +622,9 @@ func buildCContact(input CreateContactInput) C.CContact {
 		cc.instantMessagesCount = C.int(len(ims))
 	}
 
-	if len(input.Dates) > 0 {
-		dates := make([]C.CLabeledDateComponents, len(input.Dates))
-		for i, d := range input.Dates {
+	if len(contact.Dates) > 0 {
+		dates := make([]C.CLabeledDateComponents, len(contact.Dates))
+		for i, d := range contact.Dates {
 			dates[i] = C.CLabeledDateComponents{
 				identifier: makeBridgeString(d.Identifier),
 				label:      makeBridgeString(d.Label),
@@ -636,9 +639,9 @@ func buildCContact(input CreateContactInput) C.CContact {
 		cc.datesCount = C.int(len(dates))
 	}
 
-	if len(input.ImageData) > 0 {
-		cc.imageData = C.CBytes(input.ImageData)
-		cc.imageDataLen = C.int(len(input.ImageData))
+	if len(contact.ImageData) > 0 {
+		cc.imageData = C.CBytes(contact.ImageData)
+		cc.imageDataLen = C.int(len(contact.ImageData))
 	}
 
 	return cc
@@ -646,6 +649,7 @@ func buildCContact(input CreateContactInput) C.CContact {
 
 func freeCContactInput(cc *C.CContact) {
 	freeBridgeString(cc.identifier)
+	freeBridgeString(cc.containerID)
 	freeBridgeString(cc.namePrefix)
 	freeBridgeString(cc.givenName)
 	freeBridgeString(cc.middleName)

@@ -105,9 +105,13 @@ func TestCreateGetDeleteContact(t *testing.T) {
 	requireAuthorized(t)
 	ctx := context.Background()
 
+	defaultContainerID, err := DefaultContainerID(ctx)
+	be.Err(t, err, nil)
+
 	// Create
 	input := CreateContactInput{
 		Contact: Contact{
+			ContainerID:      defaultContainerID,
 			GivenName:        testPrefix + "John",
 			FamilyName:       testPrefix + "Doe",
 			Nickname:         "JD",
@@ -136,6 +140,7 @@ func TestCreateGetDeleteContact(t *testing.T) {
 	created, err := CreateContact(ctx, input)
 	be.Err(t, err, nil)
 	be.True(t, created.Identifier != "")
+	be.Equal(t, created.ContainerID, defaultContainerID)
 	t.Logf("created contact: %s", created.Identifier)
 	defer cleanupContact(t, ctx, created.Identifier)
 
@@ -143,6 +148,7 @@ func TestCreateGetDeleteContact(t *testing.T) {
 	fetched, err := GetContact(ctx, created.Identifier)
 	be.Err(t, err, nil)
 	be.Equal(t, fetched.Identifier, created.Identifier)
+	be.Equal(t, fetched.ContainerID, defaultContainerID)
 	be.Equal(t, fetched.GivenName, testPrefix+"John")
 	be.Equal(t, fetched.FamilyName, testPrefix+"Doe")
 	be.Equal(t, fetched.Nickname, "JD")
