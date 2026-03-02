@@ -152,18 +152,153 @@ static NSArray<id<CNKeyDescriptor>> *allContactKeys(void) {
     ];
 }
 
-static CContact convert_contact(CNContactStore *store, CNContact *contact, NSError **error) {
+static BOOL parse_bool_filter_value(NSString *value, BOOL *parsed) {
+    if (value == nil || parsed == NULL) {
+        return NO;
+    }
+    NSString *trimmed = [[value stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] lowercaseString];
+    if ([trimmed isEqualToString:@"true"] || [trimmed isEqualToString:@"1"] || [trimmed isEqualToString:@"yes"] || [trimmed isEqualToString:@"y"] || [trimmed isEqualToString:@"t"]) {
+        *parsed = YES;
+        return YES;
+    }
+    if ([trimmed isEqualToString:@"false"] || [trimmed isEqualToString:@"0"] || [trimmed isEqualToString:@"no"] || [trimmed isEqualToString:@"n"] || [trimmed isEqualToString:@"f"]) {
+        *parsed = NO;
+        return YES;
+    }
+    return NO;
+}
+
+static NSString *container_id_for_contact_identifier(CNContactStore *store, NSString *contactID, NSError **error) {
+    if (contactID == nil || contactID.length == 0) {
+        return @"";
+    }
+    NSArray<CNContainer *> *containers = [store containersMatchingPredicate:[CNContainer predicateForContainerOfContactWithIdentifier:contactID] error:error];
+    if (error != NULL && *error != nil) {
+        return @"";
+    }
+    if (containers.count > 0 && containers[0].identifier != nil) {
+        return containers[0].identifier;
+    }
+    return @"";
+}
+
+static NSString *container_id_for_group_identifier(CNContactStore *store, NSString *groupID, NSError **error) {
+    if (groupID == nil || groupID.length == 0) {
+        return @"";
+    }
+    NSArray<CNContainer *> *containers = [store containersMatchingPredicate:[CNContainer predicateForContainerOfGroupWithIdentifier:groupID] error:error];
+    if (error != NULL && *error != nil) {
+        return @"";
+    }
+    if (containers.count > 0 && containers[0].identifier != nil) {
+        return containers[0].identifier;
+    }
+    return @"";
+}
+
+static NSArray<NSString *> *linked_contact_identifiers(CNContactStore *store, NSString *identifier, NSError **error) {
+    NSMutableArray<NSString *> *ids = [NSMutableArray array];
+    NSMutableSet<NSString *> *seen = [NSMutableSet set];
+
+    if (identifier == nil || identifier.length == 0) {
+        return ids;
+    }
+
+    CNContactFetchRequest *request = [[CNContactFetchRequest alloc] initWithKeysToFetch:@[CNContactIdentifierKey]];
+    request.unifyResults = NO;
+    request.sortOrder = CNContactSortOrderNone;
+    request.predicate = [CNContact predicateForContactsWithIdentifiers:@[identifier]];
+
+    BOOL success = [store enumerateContactsWithFetchRequest:request error:error usingBlock:^(CNContact * _Nonnull contact, BOOL * _Nonnull stop) {
+        if (contact.identifier == nil || contact.identifier.length == 0) {
+            return;
+        }
+        if (![seen containsObject:contact.identifier]) {
+            [seen addObject:contact.identifier];
+            [ids addObject:contact.identifier];
+        }
+    }];
+    if (!success || (error != NULL && *error != nil)) {
+        return @[];
+    }
+
+    if (ids.count == 0) {
+        [ids addObject:identifier];
+    }
+    return ids;
+}
+
+static NSArray<NSString *> *container_ids_for_contact_ids(CNContactStore *store, NSArray<NSString *> *contactIDs, NSError **error) {
+    NSMutableArray<NSString *> *containerIDs = [NSMutableArray array];
+    NSMutableSet<NSString *> *seen = [NSMutableSet set];
+    for (NSString *contactID in contactIDs) {
+        NSString *containerID = container_id_for_contact_identifier(store, contactID, error);
+        if (error != NULL && *error != nil) {
+            return @[];
+        }
+        if (containerID.length == 0) {
+            continue;
+        }
+        if (![seen containsObject:containerID]) {
+            [seen addObject:containerID];
+            [containerIDs addObject:containerID];
+        }
+    }
+    return containerIDs;
+}
+
+static CNContact *fetch_contact_by_identifier(CNContactStore *store, NSString *identifier, NSArray<id<CNKeyDescriptor>> *keysToFetch, BOOL unifyResults, NSError **error) {
+    if (identifier == nil || identifier.length == 0) {
+        return nil;
+    }
+    if (unifyResults) {
+        return [store unifiedContactWithIdentifier:identifier keysToFetch:keysToFetch error:error];
+    }
+
+    CNContactFetchRequest *request = [[CNContactFetchRequest alloc] initWithKeysToFetch:keysToFetch];
+    request.unifyResults = NO;
+    request.sortOrder = CNContactSortOrderNone;
+
+    __block CNContact *found = nil;
+    BOOL success = [store enumerateContactsWithFetchRequest:request error:error usingBlock:^(CNContact * _Nonnull contact, BOOL * _Nonnull stop) {
+        if ([contact.identifier isEqualToString:identifier]) {
+            found = [contact copy];
+            *stop = YES;
+        }
+    }];
+    if (!success || (error != NULL && *error != nil)) {
+        return nil;
+    }
+    return found;
+}
+
+static CContact convert_contact(CNContactStore *store, CNContact *contact, NSError **error, BOOL unifiedProjection) {
     CContact cc;
     memset(&cc, 0, sizeof(CContact));
 
     cc.identifier = cstring_from_nsstring(contact.identifier);
+    cc.unified = unifiedProjection ? 1 : 0;
 
-    NSArray<CNContainer *> *containers = [store containersMatchingPredicate:[CNContainer predicateForContainerOfContactWithIdentifier:contact.identifier] error:error];
+    NSString *containerID = container_id_for_contact_identifier(store, contact.identifier, error);
     if (error != NULL && *error != nil) {
         return cc;
     }
-    if (containers.count > 0 && containers[0].identifier != nil) {
-        cc.containerID = cstring_from_nsstring(containers[0].identifier);
+    if (containerID.length > 0) {
+        cc.containerID = cstring_from_nsstring(containerID);
+    }
+
+    if (unifiedProjection) {
+        NSArray<NSString *> *linkedIDs = linked_contact_identifiers(store, contact.identifier, error);
+        if (error != NULL && *error != nil) {
+            return cc;
+        }
+        cc.linkedIDsCount = (int)linkedIDs.count;
+        if (cc.linkedIDsCount > 0) {
+            cc.linkedIDs = (BridgeString *)malloc(sizeof(BridgeString) * cc.linkedIDsCount);
+            for (int i = 0; i < cc.linkedIDsCount; i++) {
+                cc.linkedIDs[i] = cstring_from_nsstring(linkedIDs[i]);
+            }
+        }
     }
 
     cc.contactType = (int)contact.contactType;
@@ -681,10 +816,49 @@ static BOOL string_matches_filter(NSString *fieldValue, NSString *filterValue, i
     }
 }
 
-static BOOL contact_matches_filter(CNContact *contact, CFilter filter) {
+static BOOL contact_matches_filter(CNContactStore *store, CNContact *contact, CFilter filter, BOOL unifyResults, NSError **error) {
     NSString *fieldName = nsstring_from_cstring(filter.fieldName);
     NSString *filterValue = nsstring_from_cstring(filter.value);
     int op = filter.op;
+
+    if ([fieldName isEqualToString:@"unified"]) {
+        if (op != 0) {
+            return NO;
+        }
+        BOOL wantUnified = YES;
+        if (!parse_bool_filter_value(filterValue, &wantUnified)) {
+            return NO;
+        }
+        return unifyResults == wantUnified;
+    }
+
+    if ([fieldName isEqualToString:@"containerID"]) {
+        if (op != 0) {
+            return NO;
+        }
+        if (unifyResults) {
+            NSArray<NSString *> *linkedIDs = linked_contact_identifiers(store, contact.identifier, error);
+            if (error != NULL && *error != nil) {
+                return NO;
+            }
+            NSArray<NSString *> *containerIDs = container_ids_for_contact_ids(store, linkedIDs, error);
+            if (error != NULL && *error != nil) {
+                return NO;
+            }
+            for (NSString *containerID in containerIDs) {
+                if ([containerID isEqualToString:filterValue]) {
+                    return YES;
+                }
+            }
+            return NO;
+        }
+
+        NSString *containerID = container_id_for_contact_identifier(store, contact.identifier, error);
+        if (error != NULL && *error != nil) {
+            return NO;
+        }
+        return [containerID isEqualToString:filterValue];
+    }
 
     // Single-value string fields
     if ([fieldName isEqualToString:@"givenName"] && [contact isKeyAvailable:CNContactGivenNameKey]) {
@@ -749,9 +923,12 @@ static BOOL contact_matches_filter(CNContact *contact, CFilter filter) {
     return YES;
 }
 
-static BOOL contact_matches_all_filters(CNContact *contact, CFilter *filters, int filterCount) {
+static BOOL contact_matches_all_filters(CNContactStore *store, CNContact *contact, CFilter *filters, int filterCount, BOOL unifyResults, NSError **error) {
     for (int i = 0; i < filterCount; i++) {
-        if (!contact_matches_filter(contact, filters[i])) {
+        if (!contact_matches_filter(store, contact, filters[i], unifyResults, error)) {
+            return NO;
+        }
+        if (error != NULL && *error != nil) {
             return NO;
         }
     }
@@ -789,7 +966,7 @@ CAuthResult bridge_request_access(void) {
     return result;
 }
 
-CContactResult bridge_get_contact(BridgeString identifier) {
+CContactResult bridge_get_contact(BridgeString identifier, int unifyResults) {
     CContactResult result;
     memset(&result, 0, sizeof(CContactResult));
 
@@ -798,7 +975,8 @@ CContactResult bridge_get_contact(BridgeString identifier) {
         NSString *ident = nsstring_from_cstring(identifier);
         NSError *error = nil;
 
-        CNContact *contact = [store unifiedContactWithIdentifier:ident keysToFetch:allContactKeys() error:&error];
+        BOOL wantUnified = (unifyResults != 0);
+        CNContact *contact = fetch_contact_by_identifier(store, ident, allContactKeys(), wantUnified, &error);
         if (error != nil) {
             result.error = cstring_from_error(error);
             return result;
@@ -807,12 +985,75 @@ CContactResult bridge_get_contact(BridgeString identifier) {
             result.error = cstring_from_nsstring([NSString stringWithFormat:@"contact %@ not found", ident]);
             return result;
         }
-        result.contact = convert_contact(store, contact, &error);
+        result.contact = convert_contact(store, contact, &error, wantUnified);
         if (error != nil) {
             result.error = cstring_from_error(error);
             bridge_free_contact(&result.contact);
             memset(&result.contact, 0, sizeof(CContact));
             return result;
+        }
+    }
+    return result;
+}
+
+CContactIdentityResult bridge_resolve_contact_identity(BridgeString identifier) {
+    CContactIdentityResult result;
+    memset(&result, 0, sizeof(CContactIdentityResult));
+
+    @autoreleasepool {
+        CNContactStore *store = [[CNContactStore alloc] init];
+        NSString *ident = nsstring_from_cstring(identifier);
+        NSError *error = nil;
+
+        if (ident.length == 0) {
+            result.error = cstring_from_nsstring(@"identifier is required");
+            return result;
+        }
+
+        CNContact *unified = fetch_contact_by_identifier(store, ident, @[CNContactIdentifierKey], YES, &error);
+        if (error != nil) {
+            result.error = cstring_from_error(error);
+            return result;
+        }
+        if (unified == nil) {
+            result.error = cstring_from_nsstring([NSString stringWithFormat:@"contact %@ not found", ident]);
+            return result;
+        }
+
+        CNContact *constituent = fetch_contact_by_identifier(store, ident, @[CNContactIdentifierKey], NO, &error);
+        if (error != nil) {
+            result.error = cstring_from_error(error);
+            return result;
+        }
+
+        result.identity.inputID = cstring_from_nsstring(ident);
+        result.identity.canonicalID = cstring_from_nsstring(unified.identifier ?: @"");
+        result.identity.unified = (constituent == nil) ? 1 : 0;
+
+        NSArray<NSString *> *linkedIDs = linked_contact_identifiers(store, unified.identifier, &error);
+        if (error != nil) {
+            result.error = cstring_from_error(error);
+            return result;
+        }
+        result.identity.linkedIDsCount = (int)linkedIDs.count;
+        if (result.identity.linkedIDsCount > 0) {
+            result.identity.linkedIDs = (BridgeString *)malloc(sizeof(BridgeString) * result.identity.linkedIDsCount);
+            for (int i = 0; i < result.identity.linkedIDsCount; i++) {
+                result.identity.linkedIDs[i] = cstring_from_nsstring(linkedIDs[i]);
+            }
+        }
+
+        NSArray<NSString *> *containerIDs = container_ids_for_contact_ids(store, linkedIDs, &error);
+        if (error != nil) {
+            result.error = cstring_from_error(error);
+            return result;
+        }
+        result.identity.containerIDsCount = (int)containerIDs.count;
+        if (result.identity.containerIDsCount > 0) {
+            result.identity.containerIDs = (BridgeString *)malloc(sizeof(BridgeString) * result.identity.containerIDsCount);
+            for (int i = 0; i < result.identity.containerIDsCount; i++) {
+                result.identity.containerIDs[i] = cstring_from_nsstring(containerIDs[i]);
+            }
         }
     }
     return result;
@@ -824,18 +1065,54 @@ CContactListResult bridge_list_contacts(CFilter *filters, int filterCount) {
 
     @autoreleasepool {
         CNContactStore *store = [[CNContactStore alloc] init];
+
+        BOOL unifyResults = YES;
+        BOOL sawUnifiedFilter = NO;
+        for (int i = 0; i < filterCount; i++) {
+            NSString *fieldName = nsstring_from_cstring(filters[i].fieldName);
+            if (![fieldName isEqualToString:@"unified"]) {
+                continue;
+            }
+            if (filters[i].op != 0) {
+                result.error = cstring_from_nsstring(@"unified filter only supports equals");
+                return result;
+            }
+            BOOL parsed = YES;
+            if (!parse_bool_filter_value(nsstring_from_cstring(filters[i].value), &parsed)) {
+                result.error = cstring_from_nsstring(@"unified filter requires bool value");
+                return result;
+            }
+            if (sawUnifiedFilter && parsed != unifyResults) {
+                result.error = cstring_from_nsstring(@"conflicting unified filters");
+                return result;
+            }
+            sawUnifiedFilter = YES;
+            unifyResults = parsed;
+        }
+
         CNContactFetchRequest *request = [[CNContactFetchRequest alloc] initWithKeysToFetch:allContactKeys()];
         request.sortOrder = CNContactSortOrderGivenName;
+        request.unifyResults = unifyResults;
 
         NSMutableArray<CNContact *> *matched = [NSMutableArray array];
         NSError *error = nil;
+        __block NSError *filterError = nil;
 
         BOOL success = [store enumerateContactsWithFetchRequest:request error:&error usingBlock:^(CNContact * _Nonnull contact, BOOL * _Nonnull stop) {
-            if (filterCount == 0 || contact_matches_all_filters(contact, filters, filterCount)) {
-                [matched addObject:contact];
+            if (filterCount == 0 || contact_matches_all_filters(store, contact, filters, filterCount, unifyResults, &filterError)) {
+                if (filterError == nil) {
+                    [matched addObject:contact];
+                }
+            }
+            if (filterError != nil) {
+                *stop = YES;
             }
         }];
 
+        if (filterError != nil) {
+            result.error = cstring_from_error(filterError);
+            return result;
+        }
         if (!success || error != nil) {
             result.error = cstring_from_error(error);
             return result;
@@ -845,7 +1122,7 @@ CContactListResult bridge_list_contacts(CFilter *filters, int filterCount) {
         if (result.count > 0) {
             result.contacts = (CContact *)malloc(sizeof(CContact) * result.count);
             for (int i = 0; i < result.count; i++) {
-                result.contacts[i] = convert_contact(store, matched[i], &error);
+                result.contacts[i] = convert_contact(store, matched[i], &error, unifyResults);
                 if (error != nil) {
                     result.error = cstring_from_error(error);
                     for (int j = 0; j <= i; j++) {
@@ -898,7 +1175,7 @@ CSimpleResult bridge_update_contact(CContact input) {
         }
 
         NSError *error = nil;
-        CNContact *contact = [store unifiedContactWithIdentifier:ident keysToFetch:allContactKeys() error:&error];
+        CNContact *contact = fetch_contact_by_identifier(store, ident, allContactKeys(), NO, &error);
         if (error != nil) {
             result.error = cstring_from_error(error);
             return result;
@@ -931,6 +1208,8 @@ CSimpleResult bridge_delete_contact(BridgeString identifier) {
         NSString *ident = nsstring_from_cstring(identifier);
         NSError *error = nil;
 
+        // Delete uses unified fetch for framework stability; Go-layer identity
+        // preflight rejects unified-only identifiers before this path.
         CNContact *contact = [store unifiedContactWithIdentifier:ident keysToFetch:@[CNContactIdentifierKey] error:&error];
         if (error != nil) {
             result.error = cstring_from_error(error);
@@ -1235,14 +1514,20 @@ CSimpleResult bridge_add_contact_to_group(BridgeString contactID, BridgeString g
         NSString *gid = nsstring_from_cstring(groupID);
         NSError *error = nil;
 
-        // Fetch contact
-        CNContact *contact = [store unifiedContactWithIdentifier:cid keysToFetch:@[CNContactIdentifierKey] error:&error];
+        // Fetch contact (constituent record only; unified IDs do not resolve here).
+        CNContact *contact = fetch_contact_by_identifier(store, cid, @[CNContactIdentifierKey], NO, &error);
         if (error != nil) {
             result.error = cstring_from_error(error);
             return result;
         }
         if (contact == nil) {
             result.error = cstring_from_nsstring([NSString stringWithFormat:@"contact %@ not found", cid]);
+            return result;
+        }
+
+        NSString *contactContainerID = container_id_for_contact_identifier(store, contact.identifier, &error);
+        if (error != nil) {
+            result.error = cstring_from_error(error);
             return result;
         }
 
@@ -1261,6 +1546,16 @@ CSimpleResult bridge_add_contact_to_group(BridgeString contactID, BridgeString g
         }
         if (targetGroup == nil) {
             result.error = cstring_from_nsstring([NSString stringWithFormat:@"group %@ not found", gid]);
+            return result;
+        }
+
+        NSString *groupContainerID = container_id_for_group_identifier(store, targetGroup.identifier, &error);
+        if (error != nil) {
+            result.error = cstring_from_error(error);
+            return result;
+        }
+        if (contactContainerID.length > 0 && groupContainerID.length > 0 && ![contactContainerID isEqualToString:groupContainerID]) {
+            result.error = cstring_from_nsstring([NSString stringWithFormat:@"container mismatch: contact in %@, group in %@", contactContainerID, groupContainerID]);
             return result;
         }
 
@@ -1285,14 +1580,20 @@ CSimpleResult bridge_remove_contact_from_group(BridgeString contactID, BridgeStr
         NSString *gid = nsstring_from_cstring(groupID);
         NSError *error = nil;
 
-        // Fetch contact
-        CNContact *contact = [store unifiedContactWithIdentifier:cid keysToFetch:@[CNContactIdentifierKey] error:&error];
+        // Fetch contact (constituent record only; unified IDs do not resolve here).
+        CNContact *contact = fetch_contact_by_identifier(store, cid, @[CNContactIdentifierKey], NO, &error);
         if (error != nil) {
             result.error = cstring_from_error(error);
             return result;
         }
         if (contact == nil) {
             result.error = cstring_from_nsstring([NSString stringWithFormat:@"contact %@ not found", cid]);
+            return result;
+        }
+
+        NSString *contactContainerID = container_id_for_contact_identifier(store, contact.identifier, &error);
+        if (error != nil) {
+            result.error = cstring_from_error(error);
             return result;
         }
 
@@ -1311,6 +1612,16 @@ CSimpleResult bridge_remove_contact_from_group(BridgeString contactID, BridgeStr
         }
         if (targetGroup == nil) {
             result.error = cstring_from_nsstring([NSString stringWithFormat:@"group %@ not found", gid]);
+            return result;
+        }
+
+        NSString *groupContainerID = container_id_for_group_identifier(store, targetGroup.identifier, &error);
+        if (error != nil) {
+            result.error = cstring_from_error(error);
+            return result;
+        }
+        if (contactContainerID.length > 0 && groupContainerID.length > 0 && ![contactContainerID isEqualToString:groupContainerID]) {
+            result.error = cstring_from_nsstring([NSString stringWithFormat:@"container mismatch: contact in %@, group in %@", contactContainerID, groupContainerID]);
             return result;
         }
 
@@ -1405,9 +1716,16 @@ CContactListResult bridge_list_contacts_in_group(BridgeString groupID) {
         NSString *gid = nsstring_from_cstring(groupID);
         NSError *error = nil;
 
-        NSPredicate *predicate = [CNContact predicateForContactsInGroupWithIdentifier:gid];
-        NSArray<CNContact *> *contacts = [store unifiedContactsMatchingPredicate:predicate keysToFetch:allContactKeys() error:&error];
-        if (error != nil) {
+        CNContactFetchRequest *request = [[CNContactFetchRequest alloc] initWithKeysToFetch:allContactKeys()];
+        request.unifyResults = NO;
+        request.sortOrder = CNContactSortOrderGivenName;
+        request.predicate = [CNContact predicateForContactsInGroupWithIdentifier:gid];
+
+        NSMutableArray<CNContact *> *contacts = [NSMutableArray array];
+        BOOL success = [store enumerateContactsWithFetchRequest:request error:&error usingBlock:^(CNContact * _Nonnull contact, BOOL * _Nonnull stop) {
+            [contacts addObject:contact];
+        }];
+        if (!success || error != nil) {
             result.error = cstring_from_error(error);
             return result;
         }
@@ -1416,7 +1734,7 @@ CContactListResult bridge_list_contacts_in_group(BridgeString groupID) {
         if (result.count > 0) {
             result.contacts = (CContact *)malloc(sizeof(CContact) * result.count);
             for (int i = 0; i < result.count; i++) {
-                result.contacts[i] = convert_contact(store, contacts[i], &error);
+                result.contacts[i] = convert_contact(store, contacts[i], &error, NO);
                 if (error != nil) {
                     result.error = cstring_from_error(error);
                     for (int j = 0; j <= i; j++) {
@@ -1481,6 +1799,10 @@ static void free_labeled_date(CLabeledDateComponents *ld) {
 void bridge_free_contact(CContact *contact) {
     if (contact == NULL) return;
     free_cstring(&contact->identifier);
+    for (int i = 0; i < contact->linkedIDsCount; i++) {
+        free_cstring(&contact->linkedIDs[i]);
+    }
+    if (contact->linkedIDs) free(contact->linkedIDs);
     free_cstring(&contact->containerID);
     free_cstring(&contact->namePrefix);
     free_cstring(&contact->givenName);
@@ -1539,6 +1861,23 @@ void bridge_free_contact(CContact *contact) {
 
     if (contact->imageData) free(contact->imageData);
     if (contact->thumbnailImageData) free(contact->thumbnailImageData);
+}
+
+void bridge_free_contact_identity(CContactIdentity *identity) {
+    if (identity == NULL) return;
+
+    free_cstring(&identity->inputID);
+    free_cstring(&identity->canonicalID);
+
+    for (int i = 0; i < identity->linkedIDsCount; i++) {
+        free_cstring(&identity->linkedIDs[i]);
+    }
+    if (identity->linkedIDs) free(identity->linkedIDs);
+
+    for (int i = 0; i < identity->containerIDsCount; i++) {
+        free_cstring(&identity->containerIDs[i]);
+    }
+    if (identity->containerIDs) free(identity->containerIDs);
 }
 
 void bridge_free_contact_list(CContact *contacts, int count) {

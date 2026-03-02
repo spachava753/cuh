@@ -44,6 +44,7 @@ func freeBridgeString(cs C.BridgeString) {
 func goContact(cc C.CContact) Contact {
 	c := Contact{
 		Identifier:         goString(cc.identifier),
+		Unified:            cc.unified != 0,
 		ContainerID:        goString(cc.containerID),
 		ContactType:        ContactType(cc.contactType),
 		NamePrefix:         goString(cc.namePrefix),
@@ -61,6 +62,14 @@ func goContact(cc C.CContact) Contact {
 		JobTitle:           goString(cc.jobTitle),
 		Note:               goString(cc.note),
 		ImageDataAvailable: cc.imageDataAvailable != 0,
+	}
+
+	if cc.linkedIDsCount > 0 && cc.linkedIDs != nil {
+		c.LinkedIDs = make([]string, int(cc.linkedIDsCount))
+		ids := unsafe.Slice(cc.linkedIDs, int(cc.linkedIDsCount))
+		for i, id := range ids {
+			c.LinkedIDs[i] = goString(id)
+		}
 	}
 
 	if cc.hasBirthday != 0 {
@@ -220,6 +229,29 @@ func goContainer(cc C.CContainer) Container {
 	}
 }
 
+func goContactIdentity(ci C.CContactIdentity) ContactIdentity {
+	identity := ContactIdentity{
+		InputID:     goString(ci.inputID),
+		CanonicalID: goString(ci.canonicalID),
+		Unified:     ci.unified != 0,
+	}
+	if ci.linkedIDsCount > 0 && ci.linkedIDs != nil {
+		identity.LinkedIDs = make([]string, int(ci.linkedIDsCount))
+		linkedIDs := unsafe.Slice(ci.linkedIDs, int(ci.linkedIDsCount))
+		for i, id := range linkedIDs {
+			identity.LinkedIDs[i] = goString(id)
+		}
+	}
+	if ci.containerIDsCount > 0 && ci.containerIDs != nil {
+		identity.ContainerIDs = make([]string, int(ci.containerIDsCount))
+		containerIDs := unsafe.Slice(ci.containerIDs, int(ci.containerIDsCount))
+		for i, id := range containerIDs {
+			identity.ContainerIDs[i] = goString(id)
+		}
+	}
+	return identity
+}
+
 // --- Bridge function wrappers ---
 
 func checkAuthorizationStatus() int {
@@ -235,22 +267,44 @@ func requestAccess() (int, string) {
 	return int(result.status), errStr
 }
 
-func getContact(identifier string) (Contact, string) {
+func getContact(identifier string, unified bool) (Contact, string) {
 	cid := makeBridgeString(identifier)
 	defer freeBridgeString(cid)
 
-	result := C.bridge_get_contact(cid)
+	cUnified := C.int(0)
+	if unified {
+		cUnified = 1
+	}
+	result := C.bridge_get_contact(cid, cUnified)
 	errStr := goString(result.error)
 	if result.error.str != nil {
 		C.free(unsafe.Pointer(result.error.str))
 	}
 	if errStr != "" {
+		C.bridge_free_contact(&result.contact)
 		return Contact{}, errStr
 	}
 
 	c := goContact(result.contact)
 	C.bridge_free_contact(&result.contact)
 	return c, ""
+}
+
+func resolveContactIdentity(identifier string) (ContactIdentity, string) {
+	cid := makeBridgeString(identifier)
+	defer freeBridgeString(cid)
+
+	result := C.bridge_resolve_contact_identity(cid)
+	errStr := goString(result.error)
+	if result.error.str != nil {
+		C.free(unsafe.Pointer(result.error.str))
+	}
+	identity := goContactIdentity(result.identity)
+	C.bridge_free_contact_identity(&result.identity)
+	if errStr != "" {
+		return ContactIdentity{}, errStr
+	}
+	return identity, ""
 }
 
 func listContacts(filters []Filter) ([]Contact, string) {

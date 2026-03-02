@@ -77,6 +77,49 @@ func ExampleListContacts_offsetPagination() {
 	_ = all
 }
 
+func ExampleListContacts_unifiedAndConstituentViews() {
+	ctx := context.Background()
+
+	for c, err := range contacts.ListContacts(ctx, contacts.ListContactsInput{
+		Filters: []contacts.Filter{{Field: contacts.ContactFieldUnified, Op: contacts.FilterEquals, Value: "true"}},
+	}) {
+		if err != nil {
+			return
+		}
+		_ = c.LinkedIDs // linked constituent IDs are populated for unified projections.
+		break
+	}
+
+	for c, err := range contacts.ListContacts(ctx, contacts.ListContactsInput{
+		Filters: []contacts.Filter{{Field: contacts.ContactFieldUnified, Op: contacts.FilterEquals, Value: "false"}},
+	}) {
+		if err != nil {
+			return
+		}
+		_ = c.Unified // always false in this view.
+		break
+	}
+}
+
+func ExampleListContacts_filterByContainer() {
+	ctx := context.Background()
+
+	defaultContainerID, err := contacts.DefaultContainerID(ctx)
+	if err != nil {
+		return
+	}
+
+	for c, err := range contacts.ListContacts(ctx, contacts.ListContactsInput{
+		Filters: []contacts.Filter{{Field: contacts.ContactFieldContainerID, Op: contacts.FilterEquals, Value: defaultContainerID}},
+	}) {
+		if err != nil {
+			return
+		}
+		_ = c.Identifier
+		break
+	}
+}
+
 func ExampleCreateContact_batch() {
 	ctx := context.Background()
 
@@ -176,11 +219,26 @@ func ExampleAddContactToGroup_syncSelection() {
 		if !strings.Contains(c.JobTitle, "Engineer") {
 			continue
 		}
-		if _, ok := inGroup[c.Identifier]; ok {
-			continue
-		}
-		if err := contacts.AddContactToGroup(ctx, c.Identifier, group.Identifier); err != nil {
+
+		identity, err := contacts.ResolveContactIdentity(ctx, c.Identifier)
+		if err != nil {
 			return
+		}
+
+		targetIDs := []string{c.Identifier}
+		if identity.Unified {
+			// Explicit linked-set fan-out recipe.
+			targetIDs = identity.LinkedIDs
+		}
+
+		for _, targetID := range targetIDs {
+			if _, ok := inGroup[targetID]; ok {
+				continue
+			}
+			if err := contacts.AddContactToGroup(ctx, targetID, group.Identifier); err != nil {
+				return
+			}
+			inGroup[targetID] = struct{}{}
 		}
 	}
 
@@ -207,6 +265,34 @@ func ExampleGetContact_errorHandling() {
 	if errors.As(err, &opErr) {
 		_ = fmt.Sprintf("op=%s id=%s", opErr.Op, opErr.ID)
 	}
+}
+
+func ExampleResolveContactIdentity_preflightMutation() {
+	ctx := context.Background()
+	identifier := "some-contact-id"
+
+	identity, err := contacts.ResolveContactIdentity(ctx, identifier)
+	if err != nil {
+		return
+	}
+
+	if identity.Unified {
+		// Unified IDs are not directly mutable; choose an explicit strategy.
+		for _, linkedID := range identity.LinkedIDs {
+			nickname := "Updated via fan-out"
+			_, _ = contacts.UpdateContact(ctx, contacts.UpdateContactInput{
+				Identifier: linkedID,
+				Nickname:   &nickname,
+			})
+		}
+		return
+	}
+
+	nickname := "Updated once"
+	_, _ = contacts.UpdateContact(ctx, contacts.UpdateContactInput{
+		Identifier: identifier,
+		Nickname:   &nickname,
+	})
 }
 
 func createAutoIncrementContact(ctx context.Context, prefix, familyName string) (contacts.Contact, error) {

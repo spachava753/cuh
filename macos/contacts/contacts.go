@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"iter"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -72,12 +73,19 @@ type DateComponents struct {
 
 // Contact is the model for a macOS contact.
 //
+// A Contact value can represent either a unified projection (`Unified=true`) or
+// a constituent record (`Unified=false`). For unified projections, LinkedIDs
+// contains the linked constituent identifiers. For constituent records,
+// LinkedIDs is empty.
+//
 // Fields are populated based on what was requested via the keys-to-fetch
 // mechanism of the Contacts.framework. ContainerID identifies the owning
 // container/account when available. Unset multi-value fields are nil (not empty
 // slices).
 type Contact struct {
 	Identifier         string
+	Unified            bool
+	LinkedIDs          []string
 	ContainerID        string
 	ContactType        ContactType
 	NamePrefix         string
@@ -145,6 +153,13 @@ const (
 	ContactFieldEmailAddresses ContactField = "emailAddresses"
 	// ContactFieldPhoneNumbers matches values in phoneNumbers.
 	ContactFieldPhoneNumbers ContactField = "phoneNumbers"
+	// ContactFieldUnified matches whether listing returns unified projections.
+	// Value must be parseable as bool and operator must be FilterEquals.
+	ContactFieldUnified ContactField = "unified"
+	// ContactFieldContainerID matches the contact container identifier.
+	// For unified listings, this matches if any linked constituent is in the
+	// provided container.
+	ContactFieldContainerID ContactField = "containerID"
 )
 
 // FilterOp specifies how a filter matches against a field value.
@@ -176,6 +191,20 @@ type Filter struct {
 type ListContactsInput struct {
 	Filters []Filter
 	Offset  int
+}
+
+// ContactIdentity describes how an input identifier resolves in Contacts.
+//
+// CanonicalID is the unified canonical identifier. Unified reports whether the
+// input identifier itself resolves to a unified projection (non-mutable).
+// LinkedIDs are linked constituent record identifiers, and ContainerIDs are the
+// corresponding constituent container identifiers.
+type ContactIdentity struct {
+	InputID      string
+	CanonicalID  string
+	Unified      bool
+	LinkedIDs    []string
+	ContainerIDs []string
 }
 
 // UpdateContactInput specifies mutable fields for updating a contact.
@@ -297,6 +326,10 @@ var (
 	ErrUnsupported = errors.New("contacts: unsupported")
 	// ErrVerificationFailed indicates read-after-write verification failed.
 	ErrVerificationFailed = errors.New("contacts: verification failed")
+	// ErrUnifiedContactNotMutable indicates a mutation target is a unified ID.
+	ErrUnifiedContactNotMutable = errors.New("contacts: unified contact not mutable")
+	// ErrGroupContainerMismatch indicates contact/group container mismatch.
+	ErrGroupContainerMismatch = errors.New("contacts: group container mismatch")
 )
 
 // OpError captures operation-level failures with typed causes.
@@ -330,7 +363,9 @@ func validContactField(field ContactField) bool {
 		ContactFieldNamePrefix,
 		ContactFieldNameSuffix,
 		ContactFieldEmailAddresses,
-		ContactFieldPhoneNumbers:
+		ContactFieldPhoneNumbers,
+		ContactFieldUnified,
+		ContactFieldContainerID:
 		return true
 	default:
 		return false
@@ -339,12 +374,33 @@ func validContactField(field ContactField) bool {
 
 // ValidateFilters validates filter fields and operators.
 func ValidateFilters(filters []Filter) error {
+	var unifiedSeen bool
+	var unifiedValue bool
 	for i, f := range filters {
 		if !validContactField(f.Field) {
 			return fmt.Errorf("%w: filter[%d] field %q is unsupported", ErrInvalidArgument, i, f.Field)
 		}
 		if f.Op < FilterEquals || f.Op > FilterNotContains {
 			return fmt.Errorf("%w: filter[%d] has invalid operator %d", ErrInvalidArgument, i, f.Op)
+		}
+		switch f.Field {
+		case ContactFieldUnified:
+			if f.Op != FilterEquals {
+				return fmt.Errorf("%w: filter[%d] field %q only supports FilterEquals", ErrInvalidArgument, i, f.Field)
+			}
+			v, err := strconv.ParseBool(strings.TrimSpace(f.Value))
+			if err != nil {
+				return fmt.Errorf("%w: filter[%d] field %q requires bool value", ErrInvalidArgument, i, f.Field)
+			}
+			if unifiedSeen && unifiedValue != v {
+				return fmt.Errorf("%w: conflicting %q filters", ErrInvalidArgument, f.Field)
+			}
+			unifiedSeen = true
+			unifiedValue = v
+		case ContactFieldContainerID:
+			if f.Op != FilterEquals {
+				return fmt.Errorf("%w: filter[%d] field %q only supports FilterEquals", ErrInvalidArgument, i, f.Field)
+			}
 		}
 	}
 	return nil
@@ -361,6 +417,10 @@ func classifyBridgeError(msg string) error {
 		return fmt.Errorf("%w: %s", ErrNotFound, trimmed)
 	case strings.Contains(lower, "denied"), strings.Contains(lower, "not authorized"), strings.Contains(lower, "authorization"):
 		return fmt.Errorf("%w: %s", ErrPermissionDenied, trimmed)
+	case strings.Contains(lower, "unified"), strings.Contains(lower, "not mutable"):
+		return fmt.Errorf("%w: %s", ErrUnifiedContactNotMutable, trimmed)
+	case strings.Contains(lower, "container mismatch"), strings.Contains(lower, "cross-container"):
+		return fmt.Errorf("%w: %s", ErrGroupContainerMismatch, trimmed)
 	case strings.Contains(lower, "unsupported"):
 		return fmt.Errorf("%w: %s", ErrUnsupported, trimmed)
 	case strings.Contains(lower, "invalid"), strings.Contains(lower, "required"):
@@ -702,7 +762,7 @@ func RequestAuthorization(ctx context.Context) (AuthorizationStatus, error) {
 	return AuthorizationStatus(status), nil
 }
 
-// GetContact fetches a single contact by identifier.
+// GetContact fetches a single contact as a unified projection.
 func GetContact(ctx context.Context, identifier string) (Contact, error) {
 	identifier = strings.TrimSpace(identifier)
 	if identifier == "" {
@@ -711,14 +771,60 @@ func GetContact(ctx context.Context, identifier string) (Contact, error) {
 	if err := ctx.Err(); err != nil {
 		return Contact{}, err
 	}
-	c, errStr := getContact(identifier)
+	c, errStr := getContact(identifier, true)
 	if errStr != "" {
 		return Contact{}, newBridgeOpError("GetContact", identifier, errStr)
 	}
 	return c, nil
 }
 
+// ResolveContactIdentity resolves identifier semantics without hydrating full
+// contact fields.
+func ResolveContactIdentity(ctx context.Context, identifier string) (ContactIdentity, error) {
+	identifier = strings.TrimSpace(identifier)
+	if identifier == "" {
+		return ContactIdentity{}, newInvalidArg("ResolveContactIdentity", "", "identifier is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return ContactIdentity{}, err
+	}
+	identity, errStr := resolveContactIdentity(identifier)
+	if errStr != "" {
+		return ContactIdentity{}, newBridgeOpError("ResolveContactIdentity", identifier, errStr)
+	}
+	return identity, nil
+}
+
+func ensureNonUnifiedContactIdentity(ctx context.Context, op, identifier string) (ContactIdentity, error) {
+	identity, err := ResolveContactIdentity(ctx, identifier)
+	if err != nil {
+		return ContactIdentity{}, err
+	}
+	if identity.Unified {
+		return ContactIdentity{}, &OpError{
+			Op:  op,
+			ID:  identifier,
+			Err: fmt.Errorf("%w: identifier %q resolves to unified projection %q", ErrUnifiedContactNotMutable, identifier, identity.CanonicalID),
+		}
+	}
+	return identity, nil
+}
+
+func hasContainerIntersection(containerIDs []string, containerID string) bool {
+	for _, id := range containerIDs {
+		if id == containerID {
+			return true
+		}
+	}
+	return false
+}
+
+func getConstituentContact(identifier string) (Contact, string) {
+	return getContact(identifier, false)
+}
+
 // ListContacts returns an iterator over contacts matching the given filters.
+// ContactFieldUnified controls unified vs non-unified projection mode.
 func ListContacts(ctx context.Context, input ListContactsInput) iter.Seq2[Contact, error] {
 	return func(yield func(Contact, error) bool) {
 		if input.Offset < 0 {
@@ -777,6 +883,7 @@ func CreateContact(ctx context.Context, input CreateContactInput) (Contact, erro
 }
 
 // UpdateContact updates mutable contact fields and verifies persistence.
+// Unified identifiers are rejected with ErrUnifiedContactNotMutable.
 func UpdateContact(ctx context.Context, input UpdateContactInput) (Contact, error) {
 	input.Identifier = strings.TrimSpace(input.Identifier)
 	if input.Identifier == "" {
@@ -788,20 +895,25 @@ func UpdateContact(ctx context.Context, input UpdateContactInput) (Contact, erro
 	if err := ctx.Err(); err != nil {
 		return Contact{}, err
 	}
-
-	current, err := GetContact(ctx, input.Identifier)
-	if err != nil {
+	if _, err := ensureNonUnifiedContactIdentity(ctx, "UpdateContact", input.Identifier); err != nil {
 		return Contact{}, err
+	}
+
+	current, errStr := getConstituentContact(input.Identifier)
+	if errStr != "" {
+		return Contact{}, newBridgeOpError("UpdateContact", input.Identifier, errStr)
 	}
 	merged := mergeContactPatch(current, input)
 	merged.Identifier = input.Identifier
+	merged.Unified = false
+	merged.LinkedIDs = nil
 
 	if errStr := updateContact(merged); errStr != "" {
 		return Contact{}, newBridgeOpError("UpdateContact", input.Identifier, errStr)
 	}
-	updated, err := GetContact(ctx, input.Identifier)
-	if err != nil {
-		return Contact{}, err
+	updated, errStr := getConstituentContact(input.Identifier)
+	if errStr != "" {
+		return Contact{}, newBridgeOpError("UpdateContact", input.Identifier, errStr)
 	}
 	if err := verifyUpdatedContact(updated, input); err != nil {
 		return Contact{}, newVerificationError("UpdateContact", input.Identifier, err.Error())
@@ -810,6 +922,7 @@ func UpdateContact(ctx context.Context, input UpdateContactInput) (Contact, erro
 }
 
 // DeleteContact deletes the contact with the given identifier.
+// Unified identifiers are rejected with ErrUnifiedContactNotMutable.
 func DeleteContact(ctx context.Context, identifier string) error {
 	identifier = strings.TrimSpace(identifier)
 	if identifier == "" {
@@ -818,17 +931,21 @@ func DeleteContact(ctx context.Context, identifier string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if _, err := ensureNonUnifiedContactIdentity(ctx, "DeleteContact", identifier); err != nil {
+		return err
+	}
 	if errStr := deleteContact(identifier); errStr != "" {
 		return newBridgeOpError("DeleteContact", identifier, errStr)
 	}
-	_, err := GetContact(ctx, identifier)
-	if err == nil {
+	_, errStr := getConstituentContact(identifier)
+	if errStr == "" {
 		return newVerificationError("DeleteContact", identifier, "contact still exists after delete")
 	}
-	if errors.Is(err, ErrNotFound) {
+	lookupErr := newBridgeOpError("DeleteContact", identifier, errStr)
+	if errors.Is(lookupErr, ErrNotFound) {
 		return nil
 	}
-	return err
+	return lookupErr
 }
 
 // GetGroup fetches a single group by identifier.
@@ -959,6 +1076,9 @@ func DeleteGroup(ctx context.Context, identifier string) error {
 }
 
 // AddContactToGroup adds a contact to a group and verifies membership.
+//
+// Membership is record/container scoped. Unified identifiers are rejected with
+// ErrUnifiedContactNotMutable.
 func AddContactToGroup(ctx context.Context, contactID, groupID string) error {
 	contactID = strings.TrimSpace(contactID)
 	groupID = strings.TrimSpace(groupID)
@@ -967,6 +1087,21 @@ func AddContactToGroup(ctx context.Context, contactID, groupID string) error {
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	identity, err := ensureNonUnifiedContactIdentity(ctx, "AddContactToGroup", contactID)
+	if err != nil {
+		return err
+	}
+	group, err := GetGroup(ctx, groupID)
+	if err != nil {
+		return err
+	}
+	if group.ContainerID != "" && len(identity.ContainerIDs) > 0 && !hasContainerIntersection(identity.ContainerIDs, group.ContainerID) {
+		return &OpError{
+			Op:  "AddContactToGroup",
+			ID:  groupID,
+			Err: fmt.Errorf("%w: contact containers %v do not include group container %q", ErrGroupContainerMismatch, identity.ContainerIDs, group.ContainerID),
+		}
 	}
 	if errStr := addContactToGroup(contactID, groupID); errStr != "" {
 		return newBridgeOpError("AddContactToGroup", groupID, errStr)
@@ -983,6 +1118,9 @@ func AddContactToGroup(ctx context.Context, contactID, groupID string) error {
 
 // RemoveContactFromGroup removes a contact from a group.
 //
+// Membership is record/container scoped. Unified identifiers are rejected with
+// ErrUnifiedContactNotMutable.
+//
 // This uses osascript (AppleScript) to perform the removal because the
 // Contacts.framework CNSaveRequest removeMember:fromGroup: method has a
 // known bug on macOS 14.6+ / 15.x where the removal silently fails.
@@ -991,6 +1129,24 @@ func RemoveContactFromGroup(ctx context.Context, contactID, groupID string) erro
 	groupID = strings.TrimSpace(groupID)
 	if contactID == "" || groupID == "" {
 		return newInvalidArg("RemoveContactFromGroup", "", "contactID and groupID are required")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	identity, err := ensureNonUnifiedContactIdentity(ctx, "RemoveContactFromGroup", contactID)
+	if err != nil {
+		return err
+	}
+	group, err := GetGroup(ctx, groupID)
+	if err != nil {
+		return err
+	}
+	if group.ContainerID != "" && len(identity.ContainerIDs) > 0 && !hasContainerIntersection(identity.ContainerIDs, group.ContainerID) {
+		return &OpError{
+			Op:  "RemoveContactFromGroup",
+			ID:  groupID,
+			Err: fmt.Errorf("%w: contact containers %v do not include group container %q", ErrGroupContainerMismatch, identity.ContainerIDs, group.ContainerID),
+		}
 	}
 	if err := removeContactFromGroupViaOSAScript(ctx, contactID, groupID); err != nil {
 		return &OpError{Op: "RemoveContactFromGroup", ID: groupID, Err: err}
@@ -1070,7 +1226,8 @@ func DefaultContainerID(ctx context.Context) (string, error) {
 	return id, nil
 }
 
-// ListContactsInGroup returns contacts that are members of the specified group.
+// ListContactsInGroup returns constituent contacts that are members of the
+// specified group (Unified=false for all returned contacts).
 func ListContactsInGroup(ctx context.Context, groupID string) ([]Contact, error) {
 	groupID = strings.TrimSpace(groupID)
 	if groupID == "" {

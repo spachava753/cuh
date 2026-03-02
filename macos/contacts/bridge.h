@@ -86,6 +86,9 @@ typedef struct {
 // --- Contact ---
 typedef struct {
     BridgeString identifier;
+    int          unified;
+    BridgeString *linkedIDs;
+    int          linkedIDsCount;
     BridgeString containerID;
     int     contactType;
     BridgeString namePrefix;
@@ -167,6 +170,21 @@ typedef struct {
 } CContactResult;
 
 typedef struct {
+    BridgeString inputID;
+    BridgeString canonicalID;
+    int          unified;
+    BridgeString *linkedIDs;
+    int          linkedIDsCount;
+    BridgeString *containerIDs;
+    int          containerIDsCount;
+} CContactIdentity;
+
+typedef struct {
+    CContactIdentity identity;
+    BridgeString     error;
+} CContactIdentityResult;
+
+typedef struct {
     BridgeString identifier;
     BridgeString error;
 } CCreateResult;
@@ -205,7 +223,8 @@ typedef struct {
 // --- Bridge functions ---
 int              bridge_check_authorization(void);
 CAuthResult      bridge_request_access(void);
-CContactResult   bridge_get_contact(BridgeString identifier);
+CContactResult   bridge_get_contact(BridgeString identifier, int unifyResults);
+CContactIdentityResult bridge_resolve_contact_identity(BridgeString identifier);
 CContactListResult bridge_list_contacts(CFilter *filters, int filterCount);
 CCreateResult    bridge_create_contact(CContact input, BridgeString containerID);
 CSimpleResult    bridge_update_contact(CContact input);
@@ -223,6 +242,7 @@ CContactListResult bridge_list_contacts_in_group(BridgeString groupID);
 
 // --- Memory management ---
 void bridge_free_contact(CContact *contact);
+void bridge_free_contact_identity(CContactIdentity *identity);
 void bridge_free_contact_list(CContact *contacts, int count);
 void bridge_free_group_list(CGroup *groups, int count);
 void bridge_free_container_list(CContainer *containers, int count);

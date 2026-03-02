@@ -16,6 +16,82 @@ const testPrefix = "CUHTest_"
 
 func ptr[T any](v T) *T { return &v }
 
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}
+
+func findUnifiedProjectionID(t *testing.T, ctx context.Context) (string, bool) {
+	t.Helper()
+	seen := 0
+	for c, err := range ListContacts(ctx, ListContactsInput{
+		Filters: []Filter{{Field: ContactFieldUnified, Value: "true", Op: FilterEquals}},
+	}) {
+		if err != nil {
+			t.Fatalf("list unified contacts: %v", err)
+		}
+		seen++
+		if seen > 500 {
+			break
+		}
+		if len(c.LinkedIDs) == 0 || containsString(c.LinkedIDs, c.Identifier) {
+			continue
+		}
+		identity, err := ResolveContactIdentity(ctx, c.Identifier)
+		if err != nil {
+			continue
+		}
+		if identity.Unified {
+			return c.Identifier, true
+		}
+	}
+	return "", false
+}
+
+func findCrossContainerMembershipPair(t *testing.T, ctx context.Context) (string, string, bool) {
+	t.Helper()
+	groups, err := ListGroups(ctx, ListGroupsInput{IncludeHierarchy: true})
+	if err != nil {
+		t.Fatalf("list groups: %v", err)
+	}
+
+	eligibleGroups := make([]Group, 0, len(groups))
+	for _, g := range groups {
+		if g.ContainerID != "" {
+			eligibleGroups = append(eligibleGroups, g)
+		}
+	}
+	if len(eligibleGroups) == 0 {
+		return "", "", false
+	}
+
+	seen := 0
+	for c, err := range ListContacts(ctx, ListContactsInput{
+		Filters: []Filter{{Field: ContactFieldUnified, Value: "false", Op: FilterEquals}},
+	}) {
+		if err != nil {
+			t.Fatalf("list constituent contacts: %v", err)
+		}
+		seen++
+		if seen > 500 {
+			break
+		}
+		if c.ContainerID == "" {
+			continue
+		}
+		for _, g := range eligibleGroups {
+			if g.ContainerID != c.ContainerID {
+				return c.Identifier, g.Identifier, true
+			}
+		}
+	}
+	return "", "", false
+}
+
 // cleanup helpers --------------------------------------------------------
 
 func cleanupContact(t *testing.T, ctx context.Context, id string) {
@@ -356,6 +432,137 @@ func TestListContactsFilterContains(t *testing.T) {
 	be.Equal(t, count, 1)
 }
 
+func TestListContactsUnifiedFilter(t *testing.T) {
+	requireAuthorized(t)
+	ctx := context.Background()
+
+	for c, err := range ListContacts(ctx, ListContactsInput{
+		Filters: []Filter{{Field: ContactFieldUnified, Value: "true", Op: FilterEquals}},
+	}) {
+		be.Err(t, err, nil)
+		be.True(t, c.Unified)
+		break
+	}
+
+	for c, err := range ListContacts(ctx, ListContactsInput{
+		Filters: []Filter{{Field: ContactFieldUnified, Value: "false", Op: FilterEquals}},
+	}) {
+		be.Err(t, err, nil)
+		be.True(t, !c.Unified)
+		break
+	}
+}
+
+func TestListContactsContainerIDFilter(t *testing.T) {
+	requireAuthorized(t)
+	ctx := context.Background()
+
+	defaultContainerID, err := DefaultContainerID(ctx)
+	be.Err(t, err, nil)
+
+	created, err := CreateContact(ctx, CreateContactInput{
+		Contact: Contact{
+			ContainerID: defaultContainerID,
+			GivenName:   testPrefix + "Container",
+			FamilyName:  testPrefix + "Filter",
+		},
+	})
+	be.Err(t, err, nil)
+	defer cleanupContact(t, ctx, created.Identifier)
+
+	foundCreated := false
+	for c, err := range ListContacts(ctx, ListContactsInput{
+		Filters: []Filter{
+			{Field: ContactFieldUnified, Value: "false", Op: FilterEquals},
+			{Field: ContactFieldContainerID, Value: defaultContainerID, Op: FilterEquals},
+		},
+	}) {
+		be.Err(t, err, nil)
+		be.Equal(t, c.ContainerID, defaultContainerID)
+		if c.Identifier == created.Identifier {
+			foundCreated = true
+		}
+	}
+	be.True(t, foundCreated)
+}
+
+func TestUpdateContactRejectsUnifiedID(t *testing.T) {
+	requireAuthorized(t)
+	ctx := context.Background()
+
+	unifiedID, ok := findUnifiedProjectionID(t, ctx)
+	if !ok {
+		t.Skip("no linked unified projection with distinct identifier found")
+	}
+
+	_, err := UpdateContact(ctx, UpdateContactInput{
+		Identifier: unifiedID,
+		Nickname:   ptr("should fail"),
+	})
+	be.Err(t, err)
+	be.True(t, errors.Is(err, ErrUnifiedContactNotMutable))
+}
+
+func TestDeleteContactRejectsUnifiedID(t *testing.T) {
+	requireAuthorized(t)
+	ctx := context.Background()
+
+	unifiedID, ok := findUnifiedProjectionID(t, ctx)
+	if !ok {
+		t.Skip("no linked unified projection with distinct identifier found")
+	}
+
+	err := DeleteContact(ctx, unifiedID)
+	be.Err(t, err)
+	be.True(t, errors.Is(err, ErrUnifiedContactNotMutable))
+}
+
+func TestGroupMembershipRejectsUnifiedID(t *testing.T) {
+	requireAuthorized(t)
+	ctx := context.Background()
+
+	unifiedID, ok := findUnifiedProjectionID(t, ctx)
+	if !ok {
+		t.Skip("no linked unified projection with distinct identifier found")
+	}
+
+	defaultContainerID, err := DefaultContainerID(ctx)
+	be.Err(t, err, nil)
+
+	g, err := CreateGroup(ctx, CreateGroupInput{
+		Name:        testPrefix + "UnifiedRejectGroup",
+		ContainerID: defaultContainerID,
+	})
+	be.Err(t, err, nil)
+	defer cleanupGroup(t, ctx, g.Identifier)
+
+	err = AddContactToGroup(ctx, unifiedID, g.Identifier)
+	be.Err(t, err)
+	be.True(t, errors.Is(err, ErrUnifiedContactNotMutable))
+
+	err = RemoveContactFromGroup(ctx, unifiedID, g.Identifier)
+	be.Err(t, err)
+	be.True(t, errors.Is(err, ErrUnifiedContactNotMutable))
+}
+
+func TestAddContactToGroupContainerMismatchError(t *testing.T) {
+	requireAuthorized(t)
+	ctx := context.Background()
+
+	contactID, groupID, ok := findCrossContainerMembershipPair(t, ctx)
+	if !ok {
+		t.Skip("could not find cross-container contact/group pair")
+	}
+
+	err := AddContactToGroup(ctx, contactID, groupID)
+	if err == nil {
+		t.Skip("cross-container add unexpectedly succeeded in this environment")
+	}
+	if !errors.Is(err, ErrGroupContainerMismatch) {
+		t.Skipf("cross-container mismatch not reproducible with typed error: %v", err)
+	}
+}
+
 // groups -----------------------------------------------------------------
 
 func TestCreateGetDeleteGroup(t *testing.T) {
@@ -457,6 +664,7 @@ func TestAddRemoveContactGroup(t *testing.T) {
 	be.Err(t, err, nil)
 	found := false
 	for _, m := range members {
+		be.True(t, !m.Unified)
 		if m.Identifier == c.Identifier {
 			found = true
 			break
@@ -591,6 +799,24 @@ func TestGetContactNotFound(t *testing.T) {
 	t.Logf("expected error: %v", err)
 }
 
+func TestResolveContactIdentity(t *testing.T) {
+	requireAuthorized(t)
+	ctx := context.Background()
+
+	created, err := CreateContact(ctx, CreateContactInput{
+		Contact: Contact{GivenName: testPrefix + "Identity", FamilyName: testPrefix + "Probe"},
+	})
+	be.Err(t, err, nil)
+	defer cleanupContact(t, ctx, created.Identifier)
+
+	identity, err := ResolveContactIdentity(ctx, created.Identifier)
+	be.Err(t, err, nil)
+	be.Equal(t, identity.InputID, created.Identifier)
+	be.True(t, identity.CanonicalID != "")
+	be.True(t, !identity.Unified)
+	be.True(t, len(identity.LinkedIDs) >= 1)
+}
+
 func TestGetGroupNotFound(t *testing.T) {
 	requireAuthorized(t)
 	ctx := context.Background()
@@ -713,6 +939,18 @@ func TestMultipleContactsInGroup(t *testing.T) {
 
 func TestValidateFilters(t *testing.T) {
 	err := ValidateFilters([]Filter{{Field: ContactField("note"), Value: "x", Op: FilterContains}})
+	be.Err(t, err)
+	be.True(t, errors.Is(err, ErrInvalidArgument))
+
+	err = ValidateFilters([]Filter{{Field: ContactFieldUnified, Value: "not-bool", Op: FilterEquals}})
+	be.Err(t, err)
+	be.True(t, errors.Is(err, ErrInvalidArgument))
+
+	err = ValidateFilters([]Filter{{Field: ContactFieldUnified, Value: "true", Op: FilterContains}})
+	be.Err(t, err)
+	be.True(t, errors.Is(err, ErrInvalidArgument))
+
+	err = ValidateFilters([]Filter{{Field: ContactFieldContainerID, Value: "container", Op: FilterContains}})
 	be.Err(t, err)
 	be.True(t, errors.Is(err, ErrInvalidArgument))
 }

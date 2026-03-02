@@ -8,7 +8,7 @@
 // Primitive groups:
 //
 //   - Contacts: [CreateContact], [GetContact], [ListContacts], [UpdateContact],
-//     [DeleteContact].
+//     [DeleteContact], [ResolveContactIdentity].
 //   - Groups: [CreateGroup], [GetGroup], [ListGroups], [ListSubgroups],
 //     [UpdateGroup], [DeleteGroup].
 //   - Membership: [AddContactToGroup], [RemoveContactFromGroup],
@@ -22,6 +22,37 @@
 // Suggested import path from calling code:
 //
 //	import "github.com/spachava753/cuh/macos/contacts"
+//
+// # Two Contact Representations
+//
+// Contacts can be returned in two identity representations:
+//   - constituent record: `Unified=false`
+//   - unified projection: `Unified=true` with `LinkedIDs` listing constituents
+//
+// # Identity Semantics
+//
+// Unified reads may return canonical identifiers that differ from input IDs.
+// Use [ResolveContactIdentity] as the preflight primitive before mutations.
+// It reports canonical ID, whether the input ID is unified, linked constituents,
+// and constituent container IDs.
+//
+// # Listing Semantics
+//
+// [ListContacts] supports [ContactFieldUnified] and [ContactFieldContainerID].
+// When listing unified projections, container filtering matches if any linked
+// constituent belongs to the target container.
+//
+// # Mutation Semantics
+//
+// Update/delete/group-membership mutations require non-unified identifiers.
+// Unified identifiers are rejected with typed errors such as
+// [ErrUnifiedContactNotMutable].
+//
+// # Group Semantics
+//
+// Group membership is record/container scoped with no implied linked-set fanout.
+// [ListContactsInGroup] returns non-unified contacts (`Unified=false`) so
+// membership state is deterministic.
 //
 // # Safety Model
 //
@@ -218,11 +249,24 @@
 //			if err != nil {
 //				return err
 //			}
-//			if _, ok := inGroup[c.Identifier]; ok {
-//				continue
-//			}
-//			if err := contacts.AddContactToGroup(ctx, c.Identifier, group.Identifier); err != nil {
+//			identity, err := contacts.ResolveContactIdentity(ctx, c.Identifier)
+//			if err != nil {
 //				return err
+//			}
+//
+//			targetIDs := []string{c.Identifier}
+//			if identity.Unified {
+//				targetIDs = identity.LinkedIDs // explicit fan-out for linked set
+//			}
+//
+//			for _, targetID := range targetIDs {
+//				if _, ok := inGroup[targetID]; ok {
+//					continue
+//				}
+//				if err := contacts.AddContactToGroup(ctx, targetID, group.Identifier); err != nil {
+//					return err
+//				}
+//				inGroup[targetID] = struct{}{}
 //			}
 //		}
 //		return nil
