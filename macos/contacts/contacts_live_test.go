@@ -4,6 +4,7 @@ package contacts
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/nalgeon/be"
@@ -12,6 +13,8 @@ import (
 // testPrefix is prepended to all test-created data to avoid collisions
 // with the user's real contacts.
 const testPrefix = "CUHTest_"
+
+func ptr[T any](v T) *T { return &v }
 
 // cleanup helpers --------------------------------------------------------
 
@@ -104,10 +107,10 @@ func TestCreateGetDeleteContact(t *testing.T) {
 
 	// Create
 	input := CreateContactInput{
-		GivenName:    testPrefix + "John",
-		FamilyName:   testPrefix + "Doe",
-		Nickname:     "JD",
-		JobTitle:     "Engineer",
+		GivenName:        testPrefix + "John",
+		FamilyName:       testPrefix + "Doe",
+		Nickname:         "JD",
+		JobTitle:         "Engineer",
 		OrganizationName: "TestCorp",
 		PhoneNumbers: []LabeledValue[string]{
 			{Label: "mobile", Value: "+1234567890"},
@@ -195,6 +198,35 @@ func TestCreateContactOrganization(t *testing.T) {
 	t.Logf("org contact full name: %q", created.FullName())
 }
 
+func TestUpdateContact(t *testing.T) {
+	requireAuthorized(t)
+	ctx := context.Background()
+
+	created, err := CreateContact(ctx, CreateContactInput{
+		GivenName:  testPrefix + "Update",
+		FamilyName: testPrefix + "Contact",
+	})
+	be.Err(t, err, nil)
+	defer cleanupContact(t, ctx, created.Identifier)
+
+	updated, err := UpdateContact(ctx, UpdateContactInput{
+		Identifier: created.Identifier,
+		Nickname:   ptr("UpdatedNick"),
+		JobTitle:   ptr("Staff Engineer"),
+	})
+	be.Err(t, err, nil)
+	be.Equal(t, updated.Nickname, "UpdatedNick")
+	be.Equal(t, updated.JobTitle, "Staff Engineer")
+
+	phones := []LabeledValue[string]{{Label: "mobile", Value: "+15550001111"}}
+	updated, err = UpdateContact(ctx, UpdateContactInput{
+		Identifier:   created.Identifier,
+		PhoneNumbers: &phones,
+	})
+	be.Err(t, err, nil)
+	be.Equal(t, len(updated.PhoneNumbers), 1)
+}
+
 // ListContacts -----------------------------------------------------------
 
 func TestListContacts(t *testing.T) {
@@ -230,7 +262,7 @@ func TestListContacts(t *testing.T) {
 		count := 0
 		for c, err := range ListContacts(ctx, ListContactsInput{
 			Filters: []Filter{
-				{FieldName: "familyName", Value: testPrefix + "ListTest", Op: FilterEquals},
+				{Field: ContactFieldFamilyName, Value: testPrefix + "ListTest", Op: FilterEquals},
 			},
 		}) {
 			be.Err(t, err, nil)
@@ -243,8 +275,8 @@ func TestListContacts(t *testing.T) {
 	t.Run("filter not contains", func(t *testing.T) {
 		for c, err := range ListContacts(ctx, ListContactsInput{
 			Filters: []Filter{
-				{FieldName: "givenName", Value: testPrefix + "Alice", Op: FilterEquals},
-				{FieldName: "familyName", Value: testPrefix + "ListTest", Op: FilterEquals},
+				{Field: ContactFieldGivenName, Value: testPrefix + "Alice", Op: FilterEquals},
+				{Field: ContactFieldFamilyName, Value: testPrefix + "ListTest", Op: FilterEquals},
 			},
 		}) {
 			be.Err(t, err, nil)
@@ -256,7 +288,7 @@ func TestListContacts(t *testing.T) {
 		count := 0
 		for _, err := range ListContacts(ctx, ListContactsInput{
 			Filters: []Filter{
-				{FieldName: "familyName", Value: testPrefix + "ListTest", Op: FilterEquals},
+				{Field: ContactFieldFamilyName, Value: testPrefix + "ListTest", Op: FilterEquals},
 			},
 			Offset: 1,
 		}) {
@@ -296,7 +328,7 @@ func TestListContactsFilterContains(t *testing.T) {
 	count := 0
 	for c, err := range ListContacts(ctx, ListContactsInput{
 		Filters: []Filter{
-			{FieldName: "familyName", Value: "Unique987654", Op: FilterContains},
+			{Field: ContactFieldFamilyName, Value: "Unique987654", Op: FilterContains},
 		},
 	}) {
 		be.Err(t, err, nil)
@@ -329,7 +361,7 @@ func TestCreateGetDeleteGroup(t *testing.T) {
 	be.Equal(t, fetched.Name, testPrefix+"TestGroup")
 
 	// List groups
-	groups, err := ListGroups(ctx, "")
+	groups, err := ListGroups(ctx, ListGroupsInput{IncludeHierarchy: true})
 	be.Err(t, err, nil)
 	found := false
 	for _, grp := range groups {
@@ -362,7 +394,7 @@ func TestListGroupsInContainer(t *testing.T) {
 	be.Err(t, err, nil)
 	defer cleanupGroup(t, ctx, g.Identifier)
 
-	groups, err := ListGroups(ctx, defaultID)
+	groups, err := ListGroups(ctx, ListGroupsInput{ContainerID: defaultID, IncludeHierarchy: true})
 	be.Err(t, err, nil)
 
 	found := false
@@ -466,14 +498,12 @@ func TestCreateSubgroup(t *testing.T) {
 	requireAuthorized(t)
 	ctx := context.Background()
 
-	// Create parent group
 	parent, err := CreateGroup(ctx, CreateGroupInput{
 		Name: testPrefix + "ParentGroup",
 	})
 	be.Err(t, err, nil)
 	defer cleanupGroup(t, ctx, parent.Identifier)
 
-	// Create child group with parent
 	child, err := CreateGroup(ctx, CreateGroupInput{
 		Name:          testPrefix + "ChildGroup",
 		ParentGroupID: parent.Identifier,
@@ -483,7 +513,48 @@ func TestCreateSubgroup(t *testing.T) {
 
 	be.True(t, child.Identifier != "")
 	be.Equal(t, child.Name, testPrefix+"ChildGroup")
-	t.Logf("parent=%s child=%s", parent.Identifier, child.Identifier)
+	be.Equal(t, child.ParentGroupID, parent.Identifier)
+
+	subgroups, err := ListSubgroups(ctx, parent.Identifier)
+	be.Err(t, err, nil)
+	found := false
+	for _, sg := range subgroups {
+		if sg.Identifier == child.Identifier {
+			found = true
+			break
+		}
+	}
+	be.True(t, found)
+}
+
+func TestUpdateGroup(t *testing.T) {
+	requireAuthorized(t)
+	ctx := context.Background()
+
+	parentA, err := CreateGroup(ctx, CreateGroupInput{Name: testPrefix + "ParentA"})
+	be.Err(t, err, nil)
+	defer cleanupGroup(t, ctx, parentA.Identifier)
+
+	parentB, err := CreateGroup(ctx, CreateGroupInput{Name: testPrefix + "ParentB"})
+	be.Err(t, err, nil)
+	defer cleanupGroup(t, ctx, parentB.Identifier)
+
+	child, err := CreateGroup(ctx, CreateGroupInput{
+		Name:          testPrefix + "ChildToMove",
+		ParentGroupID: parentA.Identifier,
+	})
+	be.Err(t, err, nil)
+	defer cleanupGroup(t, ctx, child.Identifier)
+
+	newName := testPrefix + "ChildMoved"
+	updated, err := UpdateGroup(ctx, UpdateGroupInput{
+		Identifier:    child.Identifier,
+		Name:          &newName,
+		ParentGroupID: &parentB.Identifier,
+	})
+	be.Err(t, err, nil)
+	be.Equal(t, updated.Name, newName)
+	be.Equal(t, updated.ParentGroupID, parentB.Identifier)
 }
 
 // edge cases / error handling --------------------------------------------
@@ -494,6 +565,7 @@ func TestGetContactNotFound(t *testing.T) {
 
 	_, err := GetContact(ctx, "nonexistent-identifier-12345")
 	be.Err(t, err)
+	be.True(t, errors.Is(err, ErrNotFound))
 	t.Logf("expected error: %v", err)
 }
 
@@ -503,6 +575,7 @@ func TestGetGroupNotFound(t *testing.T) {
 
 	_, err := GetGroup(ctx, "nonexistent-group-12345")
 	be.Err(t, err)
+	be.True(t, errors.Is(err, ErrNotFound))
 	t.Logf("expected error: %v", err)
 }
 
@@ -512,6 +585,7 @@ func TestDeleteContactNotFound(t *testing.T) {
 
 	err := DeleteContact(ctx, "nonexistent-identifier-12345")
 	be.Err(t, err)
+	be.True(t, errors.Is(err, ErrNotFound))
 	t.Logf("expected error: %v", err)
 }
 
@@ -521,6 +595,7 @@ func TestDeleteGroupNotFound(t *testing.T) {
 
 	err := DeleteGroup(ctx, "nonexistent-group-12345")
 	be.Err(t, err)
+	be.True(t, errors.Is(err, ErrNotFound))
 	t.Logf("expected error: %v", err)
 }
 
@@ -559,6 +634,7 @@ func TestCreateGroupEmptyName(t *testing.T) {
 	ctx := context.Background()
 	_, err := CreateGroup(ctx, CreateGroupInput{Name: ""})
 	be.Err(t, err)
+	be.True(t, errors.Is(err, ErrInvalidArgument))
 }
 
 // ListContactsInGroup with empty group ------------------------------------
@@ -610,6 +686,12 @@ func TestMultipleContactsInGroup(t *testing.T) {
 }
 
 // String() methods -------------------------------------------------------
+
+func TestValidateFilters(t *testing.T) {
+	err := ValidateFilters([]Filter{{Field: ContactField("note"), Value: "x", Op: FilterContains}})
+	be.Err(t, err)
+	be.True(t, errors.Is(err, ErrInvalidArgument))
+}
 
 func TestStringMethods(t *testing.T) {
 	be.Equal(t, ContactTypePerson.String(), "person")

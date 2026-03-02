@@ -488,6 +488,173 @@ static void apply_input_to_mutable(CNMutableContact *mc, CContact input) {
     }
 }
 
+static void apply_full_input_to_mutable(CNMutableContact *mc, CContact input) {
+    mc.contactType = (CNContactType)input.contactType;
+
+    mc.namePrefix = nsstring_from_cstring(input.namePrefix);
+    mc.givenName = nsstring_from_cstring(input.givenName);
+    mc.middleName = nsstring_from_cstring(input.middleName);
+    mc.familyName = nsstring_from_cstring(input.familyName);
+    mc.previousFamilyName = nsstring_from_cstring(input.previousFamilyName);
+    mc.nameSuffix = nsstring_from_cstring(input.nameSuffix);
+    mc.nickname = nsstring_from_cstring(input.nickname);
+    mc.phoneticGivenName = nsstring_from_cstring(input.phoneticGivenName);
+    mc.phoneticMiddleName = nsstring_from_cstring(input.phoneticMiddleName);
+    mc.phoneticFamilyName = nsstring_from_cstring(input.phoneticFamilyName);
+    mc.organizationName = nsstring_from_cstring(input.organizationName);
+    mc.departmentName = nsstring_from_cstring(input.departmentName);
+    mc.jobTitle = nsstring_from_cstring(input.jobTitle);
+
+    // Intentionally skip Note updates due entitlement constraints.
+
+    if (input.hasBirthday) {
+        NSDateComponents *dc = [[NSDateComponents alloc] init];
+        if (input.birthday.year > 0) dc.year = input.birthday.year;
+        if (input.birthday.month > 0) dc.month = input.birthday.month;
+        if (input.birthday.day > 0) dc.day = input.birthday.day;
+        mc.birthday = dc;
+    } else {
+        mc.birthday = nil;
+    }
+
+    if (input.phoneNumbersCount > 0) {
+        NSMutableArray<CNLabeledValue<CNPhoneNumber *> *> *phones = [NSMutableArray array];
+        for (int i = 0; i < input.phoneNumbersCount; i++) {
+            NSString *label = nsstring_from_cstring(input.phoneNumbers[i].label);
+            NSString *value = nsstring_from_cstring(input.phoneNumbers[i].value);
+            CNPhoneNumber *pn = [CNPhoneNumber phoneNumberWithStringValue:value];
+            NSString *cnLabel = nil;
+            if ([label isEqualToString:@"home"] || [label isEqualToString:@"Home"]) cnLabel = CNLabelHome;
+            else if ([label isEqualToString:@"work"] || [label isEqualToString:@"Work"]) cnLabel = CNLabelWork;
+            else if ([label isEqualToString:@"mobile"] || [label isEqualToString:@"Mobile"]) cnLabel = CNLabelPhoneNumberMobile;
+            else if ([label isEqualToString:@"main"] || [label isEqualToString:@"Main"]) cnLabel = CNLabelPhoneNumberMain;
+            else if ([label isEqualToString:@"iPhone"]) cnLabel = CNLabelPhoneNumberiPhone;
+            else if (label.length > 0) cnLabel = label;
+            [phones addObject:[CNLabeledValue labeledValueWithLabel:cnLabel value:pn]];
+        }
+        mc.phoneNumbers = phones;
+    } else {
+        mc.phoneNumbers = @[];
+    }
+
+    if (input.emailAddressesCount > 0) {
+        NSMutableArray<CNLabeledValue<NSString *> *> *emails = [NSMutableArray array];
+        for (int i = 0; i < input.emailAddressesCount; i++) {
+            NSString *label = nsstring_from_cstring(input.emailAddresses[i].label);
+            NSString *value = nsstring_from_cstring(input.emailAddresses[i].value);
+            NSString *cnLabel = nil;
+            if ([label isEqualToString:@"home"] || [label isEqualToString:@"Home"]) cnLabel = CNLabelHome;
+            else if ([label isEqualToString:@"work"] || [label isEqualToString:@"Work"]) cnLabel = CNLabelWork;
+            else if (label.length > 0) cnLabel = label;
+            [emails addObject:[CNLabeledValue labeledValueWithLabel:cnLabel value:value]];
+        }
+        mc.emailAddresses = emails;
+    } else {
+        mc.emailAddresses = @[];
+    }
+
+    if (input.postalAddressesCount > 0) {
+        NSMutableArray<CNLabeledValue<CNPostalAddress *> *> *addrs = [NSMutableArray array];
+        for (int i = 0; i < input.postalAddressesCount; i++) {
+            CNMutablePostalAddress *pa = [[CNMutablePostalAddress alloc] init];
+            pa.street = nsstring_from_cstring(input.postalAddresses[i].value.street);
+            pa.city = nsstring_from_cstring(input.postalAddresses[i].value.city);
+            pa.state = nsstring_from_cstring(input.postalAddresses[i].value.state);
+            pa.postalCode = nsstring_from_cstring(input.postalAddresses[i].value.postalCode);
+            pa.country = nsstring_from_cstring(input.postalAddresses[i].value.country);
+            pa.ISOCountryCode = nsstring_from_cstring(input.postalAddresses[i].value.isoCountryCode);
+            NSString *label = nsstring_from_cstring(input.postalAddresses[i].label);
+            NSString *cnLabel = nil;
+            if ([label isEqualToString:@"home"] || [label isEqualToString:@"Home"]) cnLabel = CNLabelHome;
+            else if ([label isEqualToString:@"work"] || [label isEqualToString:@"Work"]) cnLabel = CNLabelWork;
+            else if (label.length > 0) cnLabel = label;
+            [addrs addObject:[CNLabeledValue labeledValueWithLabel:cnLabel value:pa]];
+        }
+        mc.postalAddresses = addrs;
+    } else {
+        mc.postalAddresses = @[];
+    }
+
+    if (input.urlAddressesCount > 0) {
+        NSMutableArray<CNLabeledValue<NSString *> *> *urls = [NSMutableArray array];
+        for (int i = 0; i < input.urlAddressesCount; i++) {
+            NSString *label = nsstring_from_cstring(input.urlAddresses[i].label);
+            NSString *value = nsstring_from_cstring(input.urlAddresses[i].value);
+            NSString *cnLabel = nil;
+            if ([label isEqualToString:@"home"] || [label isEqualToString:@"Home"]) cnLabel = CNLabelHome;
+            else if ([label isEqualToString:@"work"] || [label isEqualToString:@"Work"]) cnLabel = CNLabelWork;
+            else if (label.length > 0) cnLabel = label;
+            [urls addObject:[CNLabeledValue labeledValueWithLabel:cnLabel value:value]];
+        }
+        mc.urlAddresses = urls;
+    } else {
+        mc.urlAddresses = @[];
+    }
+
+    if (input.contactRelationsCount > 0) {
+        NSMutableArray<CNLabeledValue<CNContactRelation *> *> *rels = [NSMutableArray array];
+        for (int i = 0; i < input.contactRelationsCount; i++) {
+            NSString *label = nsstring_from_cstring(input.contactRelations[i].label);
+            NSString *name = nsstring_from_cstring(input.contactRelations[i].value.name);
+            CNContactRelation *rel = [CNContactRelation contactRelationWithName:name];
+            [rels addObject:[CNLabeledValue labeledValueWithLabel:(label.length > 0 ? label : nil) value:rel]];
+        }
+        mc.contactRelations = rels;
+    } else {
+        mc.contactRelations = @[];
+    }
+
+    if (input.socialProfilesCount > 0) {
+        NSMutableArray<CNLabeledValue<CNSocialProfile *> *> *profiles = [NSMutableArray array];
+        for (int i = 0; i < input.socialProfilesCount; i++) {
+            NSString *label = nsstring_from_cstring(input.socialProfiles[i].label);
+            NSString *urlStr = nsstring_from_cstring(input.socialProfiles[i].value.urlString);
+            NSString *username = nsstring_from_cstring(input.socialProfiles[i].value.username);
+            NSString *service = nsstring_from_cstring(input.socialProfiles[i].value.service);
+            CNSocialProfile *sp = [[CNSocialProfile alloc] initWithUrlString:urlStr username:username userIdentifier:nil service:service];
+            [profiles addObject:[CNLabeledValue labeledValueWithLabel:(label.length > 0 ? label : nil) value:sp]];
+        }
+        mc.socialProfiles = profiles;
+    } else {
+        mc.socialProfiles = @[];
+    }
+
+    if (input.instantMessagesCount > 0) {
+        NSMutableArray<CNLabeledValue<CNInstantMessageAddress *> *> *ims = [NSMutableArray array];
+        for (int i = 0; i < input.instantMessagesCount; i++) {
+            NSString *label = nsstring_from_cstring(input.instantMessages[i].label);
+            NSString *username = nsstring_from_cstring(input.instantMessages[i].value.instantUsername);
+            NSString *service = nsstring_from_cstring(input.instantMessages[i].value.instantService);
+            CNInstantMessageAddress *im = [[CNInstantMessageAddress alloc] initWithUsername:username service:service];
+            [ims addObject:[CNLabeledValue labeledValueWithLabel:(label.length > 0 ? label : nil) value:im]];
+        }
+        mc.instantMessageAddresses = ims;
+    } else {
+        mc.instantMessageAddresses = @[];
+    }
+
+    if (input.datesCount > 0) {
+        NSMutableArray<CNLabeledValue<NSDateComponents *> *> *dates = [NSMutableArray array];
+        for (int i = 0; i < input.datesCount; i++) {
+            NSString *label = nsstring_from_cstring(input.dates[i].label);
+            NSDateComponents *dc = [[NSDateComponents alloc] init];
+            if (input.dates[i].value.year > 0) dc.year = input.dates[i].value.year;
+            if (input.dates[i].value.month > 0) dc.month = input.dates[i].value.month;
+            if (input.dates[i].value.day > 0) dc.day = input.dates[i].value.day;
+            [dates addObject:[CNLabeledValue labeledValueWithLabel:(label.length > 0 ? label : nil) value:dc]];
+        }
+        mc.dates = dates;
+    } else {
+        mc.dates = @[];
+    }
+
+    if (input.imageData != NULL && input.imageDataLen > 0) {
+        mc.imageData = [NSData dataWithBytes:input.imageData length:input.imageDataLen];
+    } else {
+        mc.imageData = nil;
+    }
+}
+
 // --- Filter helpers ---
 
 static BOOL string_matches_filter(NSString *fieldValue, NSString *filterValue, int op) {
@@ -670,7 +837,7 @@ CContactListResult bridge_list_contacts(CFilter *filters, int filterCount) {
     return result;
 }
 
-CCreateResult bridge_create_contact(CContact input) {
+CCreateResult bridge_create_contact(CContact input, BridgeString containerID) {
     CCreateResult result;
     memset(&result, 0, sizeof(CCreateResult));
 
@@ -680,14 +847,8 @@ CCreateResult bridge_create_contact(CContact input) {
         apply_input_to_mutable(mc, input);
 
         CNSaveRequest *saveRequest = [[CNSaveRequest alloc] init];
-
-        // Determine container
-        NSString *containerID = nsstring_from_cstring(input.identifier); // reuse identifier field for containerID
-        // Actually, we pass containerID differently. We'll use a separate mechanism.
-        // For now, use default container if not specified.
-        // The bridge.go file will handle this correctly.
-
-        [saveRequest addContact:mc toContainerWithIdentifier:nil];
+        NSString *cid = nsstring_from_cstring(containerID);
+        [saveRequest addContact:mc toContainerWithIdentifier:(cid.length > 0 ? cid : nil)];
 
         NSError *error = nil;
         if (![store executeSaveRequest:saveRequest error:&error]) {
@@ -695,6 +856,43 @@ CCreateResult bridge_create_contact(CContact input) {
             return result;
         }
         result.identifier = cstring_from_nsstring(mc.identifier);
+    }
+    return result;
+}
+
+CSimpleResult bridge_update_contact(CContact input) {
+    CSimpleResult result;
+    memset(&result, 0, sizeof(CSimpleResult));
+
+    @autoreleasepool {
+        CNContactStore *store = [[CNContactStore alloc] init];
+        NSString *ident = nsstring_from_cstring(input.identifier);
+        if (ident.length == 0) {
+            result.error = cstring_from_nsstring(@"identifier is required");
+            return result;
+        }
+
+        NSError *error = nil;
+        CNContact *contact = [store unifiedContactWithIdentifier:ident keysToFetch:allContactKeys() error:&error];
+        if (error != nil) {
+            result.error = cstring_from_error(error);
+            return result;
+        }
+        if (contact == nil) {
+            result.error = cstring_from_nsstring([NSString stringWithFormat:@"contact %@ not found", ident]);
+            return result;
+        }
+
+        CNMutableContact *mc = [contact mutableCopy];
+        apply_full_input_to_mutable(mc, input);
+
+        CNSaveRequest *saveRequest = [[CNSaveRequest alloc] init];
+        [saveRequest updateContact:mc];
+
+        if (![store executeSaveRequest:saveRequest error:&error]) {
+            result.error = cstring_from_error(error);
+            return result;
+        }
     }
     return result;
 }
@@ -730,7 +928,7 @@ CSimpleResult bridge_delete_contact(BridgeString identifier) {
     return result;
 }
 
-CGroupListResult bridge_list_groups(BridgeString containerID) {
+CGroupListResult bridge_list_groups(BridgeString containerID, int includeHierarchy) {
     CGroupListResult result;
     memset(&result, 0, sizeof(CGroupListResult));
 
@@ -750,38 +948,39 @@ CGroupListResult bridge_list_groups(BridgeString containerID) {
             return result;
         }
 
-        // Build subgroup relationships
-        // Get all containers to find which container each group belongs to
-        NSArray<CNContainer *> *containers = [store containersMatchingPredicate:nil error:&error];
-        if (error != nil) {
-            result.error = cstring_from_error(error);
-            return result;
+        NSMutableDictionary<NSString *, NSString *> *groupToContainer = [NSMutableDictionary dictionary];
+        for (CNGroup *group in groups) {
+            NSArray<CNContainer *> *containers = [store containersMatchingPredicate:[CNContainer predicateForContainerOfGroupWithIdentifier:group.identifier] error:&error];
+            if (error != nil) {
+                result.error = cstring_from_error(error);
+                return result;
+            }
+            NSString *groupContainerID = @"";
+            if (containers.count > 0 && containers[0].identifier != nil) {
+                groupContainerID = containers[0].identifier;
+            }
+            groupToContainer[group.identifier] = groupContainerID;
         }
 
-        // Map group identifiers to their container
-        NSMutableDictionary<NSString *, NSString *> *groupToContainer = [NSMutableDictionary dictionary];
+        NSMutableDictionary<NSString *, NSString *> *parentByChild = [NSMutableDictionary dictionary];
+        NSMutableDictionary<NSString *, NSMutableArray<NSString *> *> *childrenByParent = [NSMutableDictionary dictionary];
 
-        // For each container, list groups and map them
-        for (CNContainer *container in containers) {
-            NSArray<CNGroup *> *cGroups = [store groupsMatchingPredicate:[CNGroup predicateForGroupsInContainerWithIdentifier:container.identifier] error:nil];
-            for (CNGroup *g in cGroups) {
-                groupToContainer[g.identifier] = container.identifier;
+        if (includeHierarchy != 0) {
+            for (CNGroup *group in groups) {
+                NSArray<CNGroup *> *subgroups = [store groupsMatchingPredicate:[CNGroup predicateForSubgroupsInGroupWithIdentifier:group.identifier] error:&error];
+                if (error != nil) {
+                    result.error = cstring_from_error(error);
+                    return result;
+                }
+
+                NSMutableArray<NSString *> *childIDs = [NSMutableArray arrayWithCapacity:subgroups.count];
+                for (CNGroup *subgroup in subgroups) {
+                    [childIDs addObject:subgroup.identifier];
+                    parentByChild[subgroup.identifier] = group.identifier;
+                }
+                childrenByParent[group.identifier] = childIDs;
             }
         }
-
-        // Build parent/child relationships using sub-group membership
-        // Unfortunately, the Contacts framework doesn't expose subgroup
-        // relationships via a simple API. Subgroups are an Exchange/CardDAV
-        // feature and the framework stores them internally.
-        // We'll detect them by checking if any group contains sub-groups
-        // by using predicateForSubgroupsOfGroup (which doesn't exist as a public API).
-        //
-        // Since there's no public predicate for subgroup enumeration,
-        // we can try a reverse approach: for each group, check if it appears
-        // as a subgroup of another group. But this isn't directly supported.
-        //
-        // For now, we'll report flat groups with container information.
-        // Parent/child relationships can be added if the framework supports them.
 
         result.count = (int)groups.count;
         if (result.count > 0) {
@@ -790,11 +989,23 @@ CGroupListResult bridge_list_groups(BridgeString containerID) {
                 CNGroup *g = groups[i];
                 result.groups[i].identifier = cstring_from_nsstring(g.identifier);
                 result.groups[i].name = cstring_from_nsstring(g.name);
-                NSString *cid2 = groupToContainer[g.identifier];
-                result.groups[i].containerID = cstring_from_nsstring(cid2 ?: @"");
-                result.groups[i].parentGroupID = cstring_empty();
-                result.groups[i].subgroupIDs = NULL;
-                result.groups[i].subgroupIDsCount = 0;
+                NSString *resolvedContainerID = groupToContainer[g.identifier];
+                result.groups[i].containerID = cstring_from_nsstring(resolvedContainerID ?: @"");
+
+                NSString *parentID = parentByChild[g.identifier];
+                result.groups[i].parentGroupID = cstring_from_nsstring(parentID ?: @"");
+
+                NSArray<NSString *> *subgroupIDs = childrenByParent[g.identifier];
+                int subgroupCount = (int)subgroupIDs.count;
+                result.groups[i].subgroupIDsCount = subgroupCount;
+                if (subgroupCount > 0) {
+                    result.groups[i].subgroupIDs = (BridgeString *)malloc(sizeof(BridgeString) * subgroupCount);
+                    for (int j = 0; j < subgroupCount; j++) {
+                        result.groups[i].subgroupIDs[j] = cstring_from_nsstring(subgroupIDs[j]);
+                    }
+                } else {
+                    result.groups[i].subgroupIDs = NULL;
+                }
             }
         }
     }
@@ -845,6 +1056,107 @@ CCreateResult bridge_create_group(BridgeString name, BridgeString containerID, B
             return result;
         }
         result.identifier = cstring_from_nsstring(mg.identifier);
+    }
+    return result;
+}
+
+CSimpleResult bridge_update_group(BridgeString identifier, BridgeString name, int hasName, BridgeString parentGroupID, int hasParentGroupID) {
+    CSimpleResult result;
+    memset(&result, 0, sizeof(CSimpleResult));
+
+    @autoreleasepool {
+        CNContactStore *store = [[CNContactStore alloc] init];
+        NSString *ident = nsstring_from_cstring(identifier);
+        NSString *groupName = nsstring_from_cstring(name);
+        NSString *parentID = nsstring_from_cstring(parentGroupID);
+
+        if (ident.length == 0) {
+            result.error = cstring_from_nsstring(@"identifier is required");
+            return result;
+        }
+        if (hasParentGroupID != 0 && [ident isEqualToString:parentID]) {
+            result.error = cstring_from_nsstring(@"parentGroupID cannot equal identifier");
+            return result;
+        }
+
+        NSError *error = nil;
+        NSArray<CNGroup *> *allGroups = [store groupsMatchingPredicate:nil error:&error];
+        if (error != nil) {
+            result.error = cstring_from_error(error);
+            return result;
+        }
+
+        CNGroup *targetGroup = nil;
+        CNGroup *newParentGroup = nil;
+        for (CNGroup *g in allGroups) {
+            if ([g.identifier isEqualToString:ident]) {
+                targetGroup = g;
+            }
+            if (hasParentGroupID != 0 && parentID.length > 0 && [g.identifier isEqualToString:parentID]) {
+                newParentGroup = g;
+            }
+        }
+        if (targetGroup == nil) {
+            result.error = cstring_from_nsstring([NSString stringWithFormat:@"group %@ not found", ident]);
+            return result;
+        }
+        if (hasParentGroupID != 0 && parentID.length > 0 && newParentGroup == nil) {
+            result.error = cstring_from_nsstring([NSString stringWithFormat:@"parent group %@ not found", parentID]);
+            return result;
+        }
+
+        CNSaveRequest *saveRequest = [[CNSaveRequest alloc] init];
+        BOOL hasMutations = NO;
+
+        if (hasName != 0) {
+            CNMutableGroup *mutableGroup = [targetGroup mutableCopy];
+            mutableGroup.name = groupName;
+            [saveRequest updateGroup:mutableGroup];
+            hasMutations = YES;
+        }
+
+        if (hasParentGroupID != 0) {
+            NSMutableArray<CNGroup *> *currentParents = [NSMutableArray array];
+            for (CNGroup *candidateParent in allGroups) {
+                NSArray<CNGroup *> *subgroups = [store groupsMatchingPredicate:[CNGroup predicateForSubgroupsInGroupWithIdentifier:candidateParent.identifier] error:&error];
+                if (error != nil) {
+                    result.error = cstring_from_error(error);
+                    return result;
+                }
+                for (CNGroup *subgroup in subgroups) {
+                    if ([subgroup.identifier isEqualToString:ident]) {
+                        [currentParents addObject:candidateParent];
+                        break;
+                    }
+                }
+            }
+
+            if (parentID.length == 0) {
+                for (CNGroup *existingParent in currentParents) {
+                    [saveRequest removeSubgroup:targetGroup fromGroup:existingParent];
+                    hasMutations = YES;
+                }
+            } else {
+                BOOL alreadyChild = NO;
+                for (CNGroup *existingParent in currentParents) {
+                    if ([existingParent.identifier isEqualToString:parentID]) {
+                        alreadyChild = YES;
+                        continue;
+                    }
+                    [saveRequest removeSubgroup:targetGroup fromGroup:existingParent];
+                    hasMutations = YES;
+                }
+                if (!alreadyChild) {
+                    [saveRequest addSubgroup:targetGroup toGroup:newParentGroup];
+                    hasMutations = YES;
+                }
+            }
+        }
+
+        if (hasMutations && ![store executeSaveRequest:saveRequest error:&error]) {
+            result.error = cstring_from_error(error);
+            return result;
+        }
     }
     return result;
 }

@@ -260,7 +260,7 @@ func listContacts(filters []Filter) ([]Contact, string) {
 		cFilterPtrs = make([]C.CFilter, len(filters))
 		for i, f := range filters {
 			cFilterPtrs[i] = C.CFilter{
-				fieldName: makeBridgeString(f.FieldName),
+				fieldName: makeBridgeString(string(f.Field)),
 				value:     makeBridgeString(f.Value),
 				op:        C.int(f.Op),
 			}
@@ -298,8 +298,10 @@ func listContacts(filters []Filter) ([]Contact, string) {
 func createContact(input CreateContactInput) (string, string) {
 	cc := buildCContact(input)
 	defer freeCContactInput(&cc)
+	containerID := makeBridgeString(input.ContainerID)
+	defer freeBridgeString(containerID)
 
-	result := C.bridge_create_contact(cc)
+	result := C.bridge_create_contact(cc, containerID)
 
 	errStr := goString(result.error)
 	if result.error.str != nil {
@@ -314,6 +316,175 @@ func createContact(input CreateContactInput) (string, string) {
 		C.free(unsafe.Pointer(result.identifier.str))
 	}
 	return id, ""
+}
+
+func updateContact(input Contact) string {
+	cc := buildCContactFromContact(input)
+	defer freeCContactInput(&cc)
+
+	result := C.bridge_update_contact(cc)
+	errStr := goString(result.error)
+	if result.error.str != nil {
+		C.free(unsafe.Pointer(result.error.str))
+	}
+	return errStr
+}
+
+func buildCContactFromContact(input Contact) C.CContact {
+	var cc C.CContact
+	cc.identifier = makeBridgeString(input.Identifier)
+	cc.contactType = C.int(input.ContactType)
+	cc.namePrefix = makeBridgeString(input.NamePrefix)
+	cc.givenName = makeBridgeString(input.GivenName)
+	cc.middleName = makeBridgeString(input.MiddleName)
+	cc.familyName = makeBridgeString(input.FamilyName)
+	cc.previousFamilyName = makeBridgeString(input.PreviousFamilyName)
+	cc.nameSuffix = makeBridgeString(input.NameSuffix)
+	cc.nickname = makeBridgeString(input.Nickname)
+	cc.phoneticGivenName = makeBridgeString(input.PhoneticGivenName)
+	cc.phoneticMiddleName = makeBridgeString(input.PhoneticMiddleName)
+	cc.phoneticFamilyName = makeBridgeString(input.PhoneticFamilyName)
+	cc.organizationName = makeBridgeString(input.OrganizationName)
+	cc.departmentName = makeBridgeString(input.DepartmentName)
+	cc.jobTitle = makeBridgeString(input.JobTitle)
+
+	if input.Birthday != nil {
+		cc.hasBirthday = 1
+		cc.birthday = C.CDateComponents{
+			year:  C.int(input.Birthday.Year),
+			month: C.int(input.Birthday.Month),
+			day:   C.int(input.Birthday.Day),
+		}
+	}
+
+	if len(input.PhoneNumbers) > 0 {
+		phones := make([]C.CLabeledString, len(input.PhoneNumbers))
+		for i, p := range input.PhoneNumbers {
+			phones[i] = C.CLabeledString{
+				identifier: makeBridgeString(p.Identifier),
+				label:      makeBridgeString(p.Label),
+				value:      makeBridgeString(p.Value),
+			}
+		}
+		cc.phoneNumbers = &phones[0]
+		cc.phoneNumbersCount = C.int(len(phones))
+	}
+
+	if len(input.EmailAddresses) > 0 {
+		emails := make([]C.CLabeledString, len(input.EmailAddresses))
+		for i, e := range input.EmailAddresses {
+			emails[i] = C.CLabeledString{
+				identifier: makeBridgeString(e.Identifier),
+				label:      makeBridgeString(e.Label),
+				value:      makeBridgeString(e.Value),
+			}
+		}
+		cc.emailAddresses = &emails[0]
+		cc.emailAddressesCount = C.int(len(emails))
+	}
+
+	if len(input.PostalAddresses) > 0 {
+		addrs := make([]C.CLabeledPostalAddress, len(input.PostalAddresses))
+		for i, a := range input.PostalAddresses {
+			addrs[i] = C.CLabeledPostalAddress{
+				identifier: makeBridgeString(a.Identifier),
+				label:      makeBridgeString(a.Label),
+				value: C.CPostalAddress{
+					street:         makeBridgeString(a.Value.Street),
+					city:           makeBridgeString(a.Value.City),
+					state:          makeBridgeString(a.Value.State),
+					postalCode:     makeBridgeString(a.Value.PostalCode),
+					country:        makeBridgeString(a.Value.Country),
+					isoCountryCode: makeBridgeString(a.Value.ISOCountryCode),
+				},
+			}
+		}
+		cc.postalAddresses = &addrs[0]
+		cc.postalAddressesCount = C.int(len(addrs))
+	}
+
+	if len(input.URLAddresses) > 0 {
+		urls := make([]C.CLabeledString, len(input.URLAddresses))
+		for i, u := range input.URLAddresses {
+			urls[i] = C.CLabeledString{
+				identifier: makeBridgeString(u.Identifier),
+				label:      makeBridgeString(u.Label),
+				value:      makeBridgeString(u.Value),
+			}
+		}
+		cc.urlAddresses = &urls[0]
+		cc.urlAddressesCount = C.int(len(urls))
+	}
+
+	if len(input.ContactRelations) > 0 {
+		rels := make([]C.CLabeledContactRelation, len(input.ContactRelations))
+		for i, r := range input.ContactRelations {
+			rels[i] = C.CLabeledContactRelation{
+				identifier: makeBridgeString(r.Identifier),
+				label:      makeBridgeString(r.Label),
+				value:      C.CContactRelation{name: makeBridgeString(r.Value.Name)},
+			}
+		}
+		cc.contactRelations = &rels[0]
+		cc.contactRelationsCount = C.int(len(rels))
+	}
+
+	if len(input.SocialProfiles) > 0 {
+		profiles := make([]C.CLabeledSocialProfile, len(input.SocialProfiles))
+		for i, p := range input.SocialProfiles {
+			profiles[i] = C.CLabeledSocialProfile{
+				identifier: makeBridgeString(p.Identifier),
+				label:      makeBridgeString(p.Label),
+				value: C.CSocialProfile{
+					urlString: makeBridgeString(p.Value.URLString),
+					username:  makeBridgeString(p.Value.Username),
+					service:   makeBridgeString(p.Value.Service),
+				},
+			}
+		}
+		cc.socialProfiles = &profiles[0]
+		cc.socialProfilesCount = C.int(len(profiles))
+	}
+
+	if len(input.InstantMessages) > 0 {
+		ims := make([]C.CLabeledInstantMessage, len(input.InstantMessages))
+		for i, im := range input.InstantMessages {
+			ims[i] = C.CLabeledInstantMessage{
+				identifier: makeBridgeString(im.Identifier),
+				label:      makeBridgeString(im.Label),
+				value: C.CInstantMessage{
+					instantUsername: makeBridgeString(im.Value.Username),
+					instantService:  makeBridgeString(im.Value.Service),
+				},
+			}
+		}
+		cc.instantMessages = &ims[0]
+		cc.instantMessagesCount = C.int(len(ims))
+	}
+
+	if len(input.Dates) > 0 {
+		dates := make([]C.CLabeledDateComponents, len(input.Dates))
+		for i, d := range input.Dates {
+			dates[i] = C.CLabeledDateComponents{
+				identifier: makeBridgeString(d.Identifier),
+				label:      makeBridgeString(d.Label),
+				value: C.CDateComponents{
+					year:  C.int(d.Value.Year),
+					month: C.int(d.Value.Month),
+					day:   C.int(d.Value.Day),
+				},
+			}
+		}
+		cc.dates = &dates[0]
+		cc.datesCount = C.int(len(dates))
+	}
+
+	if len(input.ImageData) > 0 {
+		cc.imageData = C.CBytes(input.ImageData)
+		cc.imageDataLen = C.int(len(input.ImageData))
+	}
+
+	return cc
 }
 
 func buildCContact(input CreateContactInput) C.CContact {
@@ -440,7 +611,7 @@ func buildCContact(input CreateContactInput) C.CContact {
 				label:      makeBridgeString(im.Label),
 				value: C.CInstantMessage{
 					instantUsername: makeBridgeString(im.Value.Username),
-					instantService: makeBridgeString(im.Value.Service),
+					instantService:  makeBridgeString(im.Value.Service),
 				},
 			}
 		}
@@ -474,6 +645,7 @@ func buildCContact(input CreateContactInput) C.CContact {
 }
 
 func freeCContactInput(cc *C.CContact) {
+	freeBridgeString(cc.identifier)
 	freeBridgeString(cc.namePrefix)
 	freeBridgeString(cc.givenName)
 	freeBridgeString(cc.middleName)
@@ -585,11 +757,15 @@ func deleteContact(identifier string) string {
 	return errStr
 }
 
-func listGroups(containerID string) ([]Group, string) {
+func listGroups(containerID string, includeHierarchy bool) ([]Group, string) {
 	cid := makeBridgeString(containerID)
 	defer freeBridgeString(cid)
 
-	result := C.bridge_list_groups(cid)
+	include := C.int(0)
+	if includeHierarchy {
+		include = 1
+	}
+	result := C.bridge_list_groups(cid, include)
 	errStr := goString(result.error)
 	if result.error.str != nil {
 		C.free(unsafe.Pointer(result.error.str))
@@ -631,6 +807,34 @@ func createGroup(input CreateGroupInput) (string, string) {
 		C.free(unsafe.Pointer(result.identifier.str))
 	}
 	return id, ""
+}
+
+func updateGroup(identifier string, name *string, parentGroupID *string) string {
+	cid := makeBridgeString(identifier)
+	defer freeBridgeString(cid)
+
+	hasName := C.int(0)
+	cname := C.BridgeString{str: nil, len: 0}
+	if name != nil {
+		hasName = 1
+		cname = makeBridgeString(*name)
+		defer freeBridgeString(cname)
+	}
+
+	hasParent := C.int(0)
+	cpid := C.BridgeString{str: nil, len: 0}
+	if parentGroupID != nil {
+		hasParent = 1
+		cpid = makeBridgeString(*parentGroupID)
+		defer freeBridgeString(cpid)
+	}
+
+	result := C.bridge_update_group(cid, cname, hasName, cpid, hasParent)
+	errStr := goString(result.error)
+	if result.error.str != nil {
+		C.free(unsafe.Pointer(result.error.str))
+	}
+	return errStr
 }
 
 func deleteGroup(identifier string) string {

@@ -3,8 +3,8 @@
 //
 // The package exposes five orthogonal primitive groups:
 //
-//   - Contacts: create, get, list (with filtering), delete contacts.
-//   - Groups: create (with optional parent), get, list, delete groups.
+//   - Contacts: create, get, list (with typed filtering), update, delete.
+//   - Groups: create (with optional parent), get, list, update, delete.
 //   - Membership: add/remove a contact to/from a group.
 //   - Containers: list and get container metadata.
 //   - Authorization: check and request Contacts access.
@@ -16,21 +16,21 @@
 //
 // # Safety Model
 //
-// Most mutating operations (create, delete, add membership) delegate directly
-// to the Contacts.framework via CNSaveRequest. [RemoveContactFromGroup] uses
-// osascript (AppleScript) instead, because the CNSaveRequest
-// removeMember:fromGroup: method has a known bug on macOS 14.6+/15.x where
-// removal silently fails. The package does not introduce its own invariants
-// or preconditions beyond what the framework enforces. If an operation
-// violates a framework constraint (e.g., deleting a non-existent contact),
-// the framework error is returned directly.
+// Most mutating operations delegate directly to Contacts.framework via
+// CNSaveRequest and then perform read-after-write verification. The package
+// returns typed sentinel errors (e.g. [ErrNotFound], [ErrInvalidArgument])
+// wrapped in [OpError] for operation context.
+//
+// [RemoveContactFromGroup] uses osascript (AppleScript) instead, because the
+// CNSaveRequest removeMember:fromGroup: method has a known bug on
+// macOS 14.6+/15.x where removal silently fails.
 //
 // # Composition Pattern
 //
 //  1. Use ListContacts with filters + pagination to find contacts.
 //  2. Use GetContact to hydrate a single contact by identifier.
-//  3. Use CreateContact / DeleteContact for mutations.
-//  4. Use ListGroups to discover groups (with parent/child info).
+//  3. Use CreateContact / UpdateContact / DeleteContact for mutations.
+//  4. Use ListGroups/ListSubgroups + UpdateGroup for hierarchy workflows.
 //  5. Use AddContactToGroup / RemoveContactFromGroup for membership.
 //
 // # Context
@@ -51,7 +51,8 @@
 // from default fetch requests to avoid error 134092. The Note field on
 // [CreateContactInput] is still settable (writes do not require the entitlement),
 // but fetched contacts will have an empty Note unless the calling app has
-// the notes entitlement.
+// the notes entitlement. For this reason, filter fields intentionally do not
+// expose a Note constant.
 //
 // # Testing
 //
