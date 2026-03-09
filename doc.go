@@ -3,16 +3,8 @@
 // This root package is documentation-only. Import specific subpackages to use
 // concrete helpers.
 //
-// Available subpackages:
-//   - github.com/spachava753/cuh/gmail
-//     Gmail helpers for sending email and managing threads/labels.
-//   - github.com/spachava753/cuh/macos/contacts
-//     macOS Contacts.framework helpers for managing contacts, groups,
-//     membership, and containers.
-//
 // Discovery workflow for agents:
 //   - Run: go doc github.com/spachava753/cuh
 //   - Then drill in with:
-//     go doc github.com/spachava753/cuh/gmail
-//     go doc github.com/spachava753/cuh/macos/contacts
+//     go doc github.com/spachava753/cuh/...
 package cuh
